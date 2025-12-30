@@ -47,6 +47,5 @@ Si encuentras útil esta extensión y quieres apoyar su desarrollo:
 [![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=XM558AC2VE3Z6)
 
 ---
-*Hecho con ❤️ y código para productividad personal.*
 
 > **Nota:** Este proyecto ha sido desarrollado con la asistencia de **Antigravity** (Google DeepMind).
