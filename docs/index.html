@@ -160,8 +160,12 @@
             playerContainer.style.display = 'block';
 
             const iframe = document.createElement('iframe');
-            // Autoplay enabled, no mute (user preference)
-            const src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
+            const urlParams = new URLSearchParams(window.location.search);
+            const mute = urlParams.get('mute') || '0';
+            const autoplay = urlParams.get('autoplay') || '1';
+
+            // Autoplay enabled, configurable mute
+            const src = `https://www.youtube.com/embed/${videoId}?autoplay=${autoplay}&mute=${mute}&rel=0&modestbranding=1&playsinline=1`;
 
             iframe.src = src;
             iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
