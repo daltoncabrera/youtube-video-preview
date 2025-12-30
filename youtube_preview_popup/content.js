@@ -33,7 +33,7 @@ const Z_INDEX_POPUP = 2147483647;
 
 // --- Load Settings ---
 let currentStrategy = 'zen'; // Default
-let iframeProxyUrl = 'https://www.youtube-nocookie.com/embed/';
+let iframeProxyUrl = 'https://daltoncabrera.github.io/youtube-video-preview';
 
 function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
@@ -148,34 +148,56 @@ function openZenPopup(videoId) {
 
 // Strategy 2: Embedded Proxy
 function openEmbeddedProxy(videoId) {
-    // Check if proxy URL ends with slash or needs one, usually embed servers are like /embed/ID
-    // If user enters 'https://yewtu.be/embed/', we append ID.
-    // If user enters 'https://invidious.io/watch?v=', we append ID. 
-    // We assume standard embed proxy pattern: BASE_URL + VIDEO_ID
-
     let embedSrc = iframeProxyUrl;
-    if (!embedSrc.endsWith('/') && !embedSrc.endsWith('=')) {
-        embedSrc += '/'; // intelligent guess
-    }
 
-    // Quick Fix for query param based proxies vs path based
-    if (embedSrc.includes('watch?v=')) {
-        embedSrc = embedSrc + videoId + "&autoplay=1";
+    // Logic for "daltoncabrera.github.io" style proxies that expect ?v=
+    if (embedSrc.includes('youtube-video-preview')) {
+        // Ensure we have the query param structure
+        if (!embedSrc.includes('?v=')) {
+            // Check for trailing slash
+            if (!embedSrc.endsWith('/')) {
+                embedSrc += '/';
+            }
+            embedSrc += '?v=';
+        }
+        embedSrc = embedSrc + videoId;
+    } else if (embedSrc.includes('?v=') || embedSrc.endsWith('=')) {
+        // Generic query param proxy
+        embedSrc = embedSrc + videoId;
     } else {
+        // Fallback for standard path-based proxies like "/embed/"
+        if (!embedSrc.endsWith('/')) {
+            embedSrc += '/';
+        }
         embedSrc = embedSrc + videoId + "?autoplay=1";
     }
 
-    // Remove existing if any
-    const existing = document.querySelector('.yt-preview-embed-overlay');
-    if (existing) existing.remove();
+    // Check for existing overlay
+    const existingOverlay = document.querySelector('.yt-preview-embed-overlay');
 
+    if (existingOverlay) {
+        // Reuse existing overlay: Just update the Iframe
+        const iframe = existingOverlay.querySelector('iframe');
+        if (iframe) {
+            iframe.src = embedSrc;
+            return; // Done
+        } else {
+            // Should not happen, but if iframe missing, remove and recreate
+            existingOverlay.remove();
+        }
+    }
+
+    // Create New Overlay
     const overlay = document.createElement('div');
     overlay.className = 'yt-preview-embed-overlay';
     Object.assign(overlay.style, {
         position: 'fixed', bottom: '20px', right: '20px', width: '480px', height: '270px',
         zIndex: Z_INDEX_POPUP, backgroundColor: 'black', boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
         borderRadius: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column',
-        border: '1px solid #333'
+        border: '1px solid #333',
+        resize: 'both', // Allow resizing
+        minWidth: '300px', // Sanity limits
+        minHeight: '170px'
     });
 
     const header = document.createElement('div');
