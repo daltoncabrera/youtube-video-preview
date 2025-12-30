@@ -48,7 +48,7 @@ const Z_INDEX_POPUP = 2147483647;
 // --- Load Settings ---
 let currentStrategy = 'embed'; // Default
 let iframeProxyUrl = 'https://daltoncabrera.github.io/youtube-video-preview';
-let defSize = 'small';
+let defSize = 'medium';
 let defPos = 'bottom-right';
 let btnPos = 'top-left'; // Button Default
 
