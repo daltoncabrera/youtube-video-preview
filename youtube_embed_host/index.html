@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Preview Host</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: black;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        #player-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        .error {
+            color: #fff;
+            text-align: center;
+        }
+
+        .error h2 {
+            font-weight: normal;
+            margin-bottom: 10px;
+        }
+
+        .error p {
+            color: #aaa;
+            font-size: 14px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="player-container">
+        <!-- Iframe will be injected here -->
+    </div>
+
+    <script>
+        // Logic to extract Video ID and render standard YouTube Embed
+        // Using standard domain is best for public servers.
+
+        function getQueryParam(param) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(param);
+        }
+
+        const videoId = getQueryParam('v');
+        const container = document.getElementById('player-container');
+
+        if (videoId) {
+            const iframe = document.createElement('iframe');
+
+            // Standard YouTube Embed URL
+            // When hosted on a real domain (e.g., your-app.vercel.app), 
+            // YouTube treats this as a standard external website.
+            const src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
+
+            iframe.src = src;
+            iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+            iframe.allowFullscreen = true;
+
+            // Standard referrer policy for external sites
+            iframe.referrerPolicy = "strict-origin-when-cross-origin";
+
+            container.appendChild(iframe);
+        } else {
+            container.innerHTML = `
+                <div class="error">
+                    <h2>Waiting for Video...</h2>
+                    <p>Pass a video ID using ?v=ID</p>
+                </div>
+            `;
+        }
+    </script>
+</body>
+
+</html>
