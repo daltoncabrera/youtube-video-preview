@@ -21,18 +21,48 @@
     isolation: isolate;
 }
 
+/* Hit area buffer to capture mouse before conflicting elements */
+.yt-preview-button::after {
+    content: '';
+    position: absolute;
+    top: -30px;
+    bottom: -30px;
+    left: -30px;
+    right: -30px;
+    /* Transparent but clickable */
+    background: transparent;
+    z-index: 1;
+}
+
+/* Extended buffer for right-side buttons to avoid Paid Promotion conflicts */
+.yt-preview-button.top-right::after,
+.yt-preview-button.bottom-right::after {
+    left: -120px;
+    /* Capture mouse much earlier from the left */
+    width: 160px;
+    /* Ensure wide enough */
+}
+
 .yt-preview-button.top-left {
-    top: 8px;
-    left: 8px;
+    top: 10px;
+    left: 10px;
     right: auto;
     bottom: auto;
 }
 
 .yt-preview-button.top-right {
-    top: 8px;
-    right: 8px;
+    top: 10px;
+    right: 10px;
     left: auto;
     bottom: auto;
+}
+
+.yt-preview-button.center {
+    top: 20px;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    bottom: auto;
+    right: auto;
 }
 
 .yt-preview-button.bottom-left {
@@ -54,7 +84,13 @@
 */
 ytd-thumbnail:hover .yt-preview-button,
 #thumbnail:hover .yt-preview-button,
-a:hover>.yt-preview-button {
+a:hover>.yt-preview-button,
+ytd-rich-item-renderer:hover .yt-preview-button,
+ytd-grid-video-renderer:hover .yt-preview-button,
+ytd-compact-video-renderer:hover .yt-preview-button,
+ytd-video-renderer:hover .yt-preview-button,
+ytd-reel-item-renderer:hover .yt-preview-button,
+ytd-rich-grid-slim-media:hover .yt-preview-button {
     display: flex !important;
 }
 
