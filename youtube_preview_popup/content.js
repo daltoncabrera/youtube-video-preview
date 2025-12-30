@@ -34,13 +34,17 @@ const Z_INDEX_POPUP = 2147483647;
 // --- Load Settings ---
 let currentStrategy = 'zen'; // Default
 let iframeProxyUrl = 'https://daltoncabrera.github.io/youtube-video-preview';
+let defSize = 'small';
+let defPos = 'bottom-right';
 
 function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.get(['strategy', 'proxyUrl'], (result) => {
+        chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos'], (result) => {
             if (result.strategy) currentStrategy = result.strategy;
             if (result.proxyUrl) iframeProxyUrl = result.proxyUrl;
-            console.log(`[Debug] Strategy loaded: ${currentStrategy}, Proxy: ${iframeProxyUrl}`);
+            if (result.defSize) defSize = result.defSize;
+            if (result.defPos) defPos = result.defPos;
+            console.log(`[Debug] Strategy loaded: ${currentStrategy}, Proxy: ${iframeProxyUrl}, Size: ${defSize}, Pos: ${defPos}`);
         });
     } else {
         console.warn("[Warning] chrome.storage.local not available. Using default 'Zen Mode'.");
@@ -54,15 +58,33 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
         if (namespace === 'local') {
             if (changes.strategy) currentStrategy = changes.strategy.newValue;
             if (changes.proxyUrl) iframeProxyUrl = changes.proxyUrl.newValue;
+            if (changes.defSize) defSize = changes.defSize.newValue;
+            if (changes.defPos) defPos = changes.defPos.newValue;
+
+            // Apply Live Updates to Active Overlay
+            const overlay = document.querySelector('.yt-preview-embed-overlay');
+            if (overlay && (changes.defSize || changes.defPos)) {
+                // Determine values to use (newly updated globals)
+                const size = getInitialSize(defSize);
+                const pos = getInitialPosition(defPos, size.width, size.height);
+
+                Object.assign(overlay.style, {
+                    width: size.width + 'px',
+                    height: size.height + 'px',
+                    ...pos
+                });
+            }
         }
     });
 }
 
 // --- Observer Logic ---
+// We need aggressive observation because YouTube native preview replaces DOM elements on hover.
 const observer = new MutationObserver((mutations) => {
+    // Determine if relevant nodes were added/removed
     let shouldProcess = false;
     for (const mutation of mutations) {
-        if (mutation.addedNodes.length) {
+        if (mutation.type === 'childList') {
             shouldProcess = true;
             break;
         }
@@ -72,10 +94,37 @@ const observer = new MutationObserver((mutations) => {
     }
 });
 
-observer.observe(document.body, { childList: true, subtree: true });
+observer.observe(document.body, {
+    childList: true,
+    subtree: true
+});
 
-setTimeout(processThumbnails, 1000);
-setInterval(processThumbnails, 2000);
+// JUST-IN-TIME Injection for Hover survival
+document.body.addEventListener('mouseenter', (e) => {
+    if (!e.target || !e.target.closest) return;
+    const thumbnail = e.target.closest('ytd-thumbnail') || e.target.closest('#thumbnail');
+
+    if (thumbnail) {
+        // Force check/inject immediately
+        // Search relative to the thumbnail to find the video link
+        let anchor = thumbnail.querySelector('a[href*="/watch?v="]');
+
+        // Sometimes the anchor is a sibling or parent depending on layout (list vs grid)
+        if (!anchor) {
+            anchor = thumbnail.parentElement.querySelector('a[href*="/watch?v="]');
+        }
+
+        if (anchor) {
+            // Check if button exists inside the thumbnail container
+            if (!thumbnail.querySelector(`.${PREVIEW_BTN_CLASS}`)) {
+                createPreviewButton(thumbnail, anchor.getAttribute("href"));
+            }
+        }
+    }
+}, true); // Capture phase
+
+// Periodic cleanup/check
+setInterval(processThumbnails, 1500);
 
 function processThumbnails() {
     const links = document.querySelectorAll('a[href*="/watch?v="]');
@@ -97,14 +146,55 @@ function processThumbnails() {
 
         if (target.querySelector(`.${PREVIEW_BTN_CLASS}`)) return;
 
-        createPreviewButton(target, anchor.getAttribute("href"));
+        createPreviewButton(anchor, anchor.getAttribute("href"));
     });
 }
 
-function createPreviewButton(container, videoUrl) {
+// --- Button Injection ---
+function createPreviewButton(targetContainer, videoUrl) {
+    // Determine the most stable parent to inject into.
+    // YouTube replaces contents of ytd-thumbnail, so we want to inject into the "Card" renderer if possible.
+    const card = targetContainer.closest('ytd-rich-item-renderer')
+        || targetContainer.closest('ytd-grid-video-renderer')
+        || targetContainer.closest('ytd-compact-video-renderer')
+        || targetContainer.closest('ytd-video-renderer'); // Search results
+
+    // If we find a stable card, use it. Otherwise fallback to targetContainer (thumbnail)
+    const container = card || targetContainer;
+
+    // Check if button already exists in this container
+    if (container.querySelector(`.${PREVIEW_BTN_CLASS}`)) return;
+
+    const videoId = extractVideoId(videoUrl);
+    if (!videoId) return;
+
     const button = document.createElement("button");
     button.className = PREVIEW_BTN_CLASS;
-    button.innerText = BUTTON_TEXT;
+    button.innerText = "Preview";
+
+    // Style adjustments for Card injection vs Thumbnail injection
+    if (card) {
+        // If injecting into card, we need to position it over the thumbnail manually.
+        // Usually the thumbnail is the first child or distinct.
+        // We can just set Top/Right of the card.
+        // Ensure card is relative
+        const style = window.getComputedStyle(container);
+        if (style.position === 'static') {
+            container.style.position = 'relative';
+        }
+        // Specific adjustments might be needed, but Top-Right of card is usually Top-Right of thumbnail roughly.
+        // However, standard thumbnails have margin.
+        // To be safe, let's stick to the TOP RIGHT of the container.
+        // But for 'ytd-rich-item-renderer', top right is above the video.
+        // This is fine, or even better.
+        button.style.zIndex = '2147483647';
+    } else {
+        // Fallback styling
+        const style = window.getComputedStyle(container);
+        if (style.position === 'static') {
+            container.style.position = 'relative';
+        }
+    }
 
     button.addEventListener("click", (e) => {
         e.preventDefault();
@@ -112,14 +202,15 @@ function createPreviewButton(container, videoUrl) {
         openPreview(videoUrl);
     });
 
-    const overlays = container.querySelector("#overlays");
-    if (overlays) {
-        overlays.appendChild(button);
-    } else {
-        const style = window.getComputedStyle(container);
-        if (style.position === 'static') container.style.position = 'relative';
-        container.appendChild(button);
-    }
+    container.appendChild(button);
+
+    // Safety: If somehow it's removed, we rely on the global observer/mouseenter to re-trigger processThumbnails
+}
+
+// Helper to extract video ID
+function extractVideoId(videoUrl) {
+    const urlObj = new URL(videoUrl, "https://www.youtube.com");
+    return urlObj.searchParams.get("v");
 }
 
 // --- Dispatcher ---
@@ -190,14 +281,23 @@ function openEmbeddedProxy(videoId) {
     // Create New Overlay
     const overlay = document.createElement('div');
     overlay.className = 'yt-preview-embed-overlay';
+
+    // Calculate Layout
+    const size = getInitialSize(defSize);
+    const pos = getInitialPosition(defPos, size.width, size.height);
+
     Object.assign(overlay.style, {
-        position: 'fixed', bottom: '20px', right: '20px', width: '480px', height: '270px',
+        position: 'fixed',
         zIndex: Z_INDEX_POPUP, backgroundColor: 'black', boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
         borderRadius: '8px', overflow: 'hidden', display: 'flex', flexDirection: 'column',
         border: '1px solid #333',
-        resize: 'both', // Allow resizing
-        minWidth: '300px', // Sanity limits
-        minHeight: '170px'
+        resize: 'both',
+        minWidth: '300px',
+        minHeight: '170px',
+        // Dynamic Props
+        width: size.width + 'px',
+        height: size.height + 'px',
+        ...pos
     });
 
     const header = document.createElement('div');
@@ -238,10 +338,13 @@ function openEmbeddedProxy(videoId) {
         const rect = overlay.getBoundingClientRect();
         initialLeft = rect.left;
         initialTop = rect.top;
-        overlay.style.right = 'auto'; // Switch to left/top positioning
+
+        // Reset to top/left positioning for dragging
+        overlay.style.right = 'auto';
         overlay.style.bottom = 'auto';
         overlay.style.left = initialLeft + 'px';
         overlay.style.top = initialTop + 'px';
+
         e.preventDefault();
     });
 
@@ -254,4 +357,33 @@ function openEmbeddedProxy(videoId) {
     });
 
     window.addEventListener('mouseup', () => { isDragging = false; });
+}
+
+// --- Layout Helpers ---
+function getInitialSize(sizeKey) {
+    switch (sizeKey) {
+        case 'medium': return { width: 640, height: 360 };
+        case 'large': return { width: 854, height: 480 };
+        case 'small':
+        default: return { width: 480, height: 270 };
+    }
+}
+
+function getInitialPosition(posKey, w, h) {
+    const margin = 20;
+    switch (posKey) {
+        case 'top-left': return { top: margin + 'px', left: margin + 'px', bottom: 'auto', right: 'auto', transform: 'none' };
+        case 'top-right': return { top: margin + 'px', right: margin + 'px', bottom: 'auto', left: 'auto', transform: 'none' };
+        case 'bottom-left': return { bottom: margin + 'px', left: margin + 'px', top: 'auto', right: 'auto', transform: 'none' };
+        case 'center':
+            return {
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                bottom: 'auto',
+                right: 'auto'
+            };
+        case 'bottom-right':
+        default: return { bottom: margin + 'px', right: margin + 'px', top: 'auto', left: 'auto', transform: 'none' };
+    }
 }
