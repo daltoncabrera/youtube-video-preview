@@ -97,10 +97,13 @@
         </label>
         <div class="info" style="margin-left: 25px;">Injects into page. Requires valid proxy to bypass blocks.</div>
 
-        <div id="embed-settings" class="sub-option visible">
-            <label>Proxy Server URL:</label>
-            <input type="text" id="proxy-url" value="https://daltoncabrera.github.io/youtube-video-preview">
+        <div class="option-group" style="margin-left: 25px; margin-top: 15px;">
+            <label>Custom Proxy URL (Leave empty for Local Player):</label>
+            <input type="text" id="proxy-url" placeholder="Default: Local Extension Player">
+        </div>
 
+        <div id="embed-settings" class="sub-option visible">
+            <!-- Size and Position only relevant for Embedded Mode -->
             <label style="margin-top: 10px; display: block;">Default Size:</label>
             <select id="def-size"
                 style="width: 100%; padding: 5px; background: #333; color: white; border: 1px solid #555;">
