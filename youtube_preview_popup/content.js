@@ -121,16 +121,16 @@ observer.observe(document.body, {
 // JUST-IN-TIME Injection for Hover survival
 document.body.addEventListener('mouseenter', (e) => {
     if (!e.target || !e.target.closest) return;
-    const thumbnail = e.target.closest('ytd-thumbnail') || e.target.closest('#thumbnail');
+    const thumbnail = e.target.closest('ytd-thumbnail') || e.target.closest('#thumbnail') || e.target.closest('ytd-reel-item-renderer');
 
     if (thumbnail) {
         // Force check/inject immediately
         // Search relative to the thumbnail to find the video link
-        let anchor = thumbnail.querySelector('a[href*="/watch?v="]');
+        let anchor = thumbnail.querySelector('a[href*="/watch?v="], a[href*="/shorts/"]');
 
         // Sometimes the anchor is a sibling or parent depending on layout (list vs grid)
         if (!anchor) {
-            anchor = thumbnail.parentElement.querySelector('a[href*="/watch?v="]');
+            anchor = thumbnail.parentElement.querySelector('a[href*="/watch?v="], a[href*="/shorts/"]');
         }
 
         if (anchor) {
@@ -146,14 +146,18 @@ document.body.addEventListener('mouseenter', (e) => {
 setInterval(processThumbnails, 1500);
 
 function processThumbnails() {
-    const links = document.querySelectorAll('a[href*="/watch?v="]');
+    const links = document.querySelectorAll('a[href*="/watch?v="], a[href*="/shorts/"]');
 
     links.forEach((anchor) => {
         // Obsolete checks removed to ensure we update recycled DOM elements
         // if (anchor.querySelector(`.${PREVIEW_BTN_CLASS}`) ... ) return;
 
         const hasImg = anchor.querySelector('img') || anchor.querySelector('yt-image');
-        const parentThumbnail = anchor.closest('ytd-thumbnail') || anchor.closest('#thumbnail');
+        // Shorts renderers are different, sometimes ytd-rich-grid-slim-media or ytd-reel-item-renderer
+        const parentThumbnail = anchor.closest('ytd-thumbnail')
+            || anchor.closest('#thumbnail')
+            || anchor.closest('ytd-reel-item-renderer')
+            || anchor.closest('ytd-rich-grid-slim-media');
 
         if (!hasImg && !parentThumbnail) return;
 
@@ -170,13 +174,14 @@ function processThumbnails() {
 }
 
 // --- Button Injection ---
-// --- Button Injection ---
 function createPreviewButton(targetContainer, videoUrl) {
     // Determine the most stable parent to inject into.
     const card = targetContainer.closest('ytd-rich-item-renderer')
         || targetContainer.closest('ytd-grid-video-renderer')
         || targetContainer.closest('ytd-compact-video-renderer')
-        || targetContainer.closest('ytd-video-renderer');
+        || targetContainer.closest('ytd-video-renderer')
+        || targetContainer.closest('ytd-reel-item-renderer') // Shorts on channel/feed
+        || targetContainer.closest('ytd-rich-grid-slim-media'); // Shorts on home grid
 
     const container = card || targetContainer;
     const videoId = extractVideoId(videoUrl);
@@ -242,7 +247,7 @@ function adjustButtonPosition(button, container) {
     // If it's a "Bottom" position AND we are inside a Card (meaning container is tall),
     // we need to anchor to the Thumbnail height manually.
     if (btnPos.startsWith('bottom')) {
-        const thumbnail = container.querySelector('ytd-thumbnail') || container.querySelector('#thumbnail');
+        const thumbnail = container.querySelector('ytd-thumbnail') || container.querySelector('#thumbnail') || container.querySelector('ytd-reel-item-renderer') || container.querySelector('ytd-rich-grid-slim-media');
         if (thumbnail && thumbnail.offsetHeight > 0) {
             // Calculate Top offset to place it at the bottom of the thumbnail
             const offset = thumbnail.offsetHeight - 40; // 40px up from bottom of image
@@ -265,7 +270,23 @@ function adjustButtonPosition(button, container) {
 // Helper to extract video ID
 function extractVideoId(videoUrl) {
     const urlObj = new URL(videoUrl, "https://www.youtube.com");
-    return urlObj.searchParams.get("v");
+
+    // Check for standard v= parameter
+    const v = urlObj.searchParams.get("v");
+    if (v) return v;
+
+    // Check for Shorts URL path: /shorts/ID
+    if (urlObj.pathname.includes('/shorts/')) {
+        const parts = urlObj.pathname.split('/');
+        // Path is usually like /shorts/VIDEO_ID or /shorts/VIDEO_ID/other
+        // parts[0] is empty, parts[1] is shorts, parts[2] is ID
+        const shortsIndex = parts.indexOf('shorts');
+        if (shortsIndex !== -1 && parts[shortsIndex + 1]) {
+            return parts[shortsIndex + 1];
+        }
+    }
+
+    return null;
 }
 
 // --- Dispatcher ---
