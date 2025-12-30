@@ -1,4 +1,5 @@
 // --- Zen Mode Logic (Popup Window) ---
+// We check for the special flag to strip down the UI
 const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.has('preview_popup')) {
     console.log("YouTube Preview Popup - Entering Zen Mode");
@@ -9,11 +10,12 @@ if (urlParams.has('preview_popup')) {
         /* Hide everything except the player */
         ytd-masthead, #secondary, #below, #comments, #chat, #merch-shelf, ytd-watch-metadata, #related, #header, #masthead-container { display: none !important; }
         
-        /* Reset layout constraints */
-        #page-manager { margin: 0 !important; margin-top: 0 !important; }
+        /* Reset layout constraints to fill window */
+        #page-manager { margin: 0 !important; margin-top: 0 !important; overflow: hidden !important; }
         #columns { max-width: 100% !important; margin: 0 !important; }
         #primary { max-width: 100% !important; padding: 0 !important; margin: 0 !important; }
         #player { max-width: 100% !important; margin: 0 !important; min-height: 100vh !important; }
+        ytd-watch-flexy { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
         
         /* Force player to fill viewport */
         html, body { overflow: hidden !important; background: #000 !important; }
@@ -21,11 +23,23 @@ if (urlParams.has('preview_popup')) {
         video { object-fit: contain !important; }
         ::-webkit-scrollbar { display: none; }
     `;
-    document.documentElement.appendChild(style);
-    throw new Error("Zen Mode Activated - Stopping script execution");
+
+    // waiting for body or head to be available
+    const injectStyles = () => {
+        if (document.head || document.documentElement) {
+            (document.head || document.documentElement).appendChild(style);
+        } else {
+            requestAnimationFrame(injectStyles);
+        }
+    };
+    injectStyles();
+
+    // We don't throw Error here to allow video player scripts to run, 
+    // but we can stop our own extension logic from running twice.
 }
 
-console.log("YouTube Preview Popup active - Generic Link Strategy");
+// --- YouTube Preview Popup Content Script ---
+console.log("YouTube Preview Popup active");
 
 const PREVIEW_BTN_CLASS = "yt-preview-button";
 const BUTTON_TEXT = "Preview";
@@ -49,7 +63,7 @@ function loadSettings() {
             console.log(`[Debug] Settings loaded. BtnPos: ${btnPos}`);
         });
     } else {
-        console.warn("[Warning] chrome.storage.local not available. Using default 'Zen Mode'.");
+        console.warn("[Warning] chrome.storage.local not available. Using default settings.");
     }
 }
 loadSettings();
@@ -289,32 +303,8 @@ function extractVideoId(videoUrl) {
     return null;
 }
 
-// --- Dispatcher ---
-function openPreview(videoUrl) {
-    const urlObj = new URL(videoUrl, "https://www.youtube.com");
-    const videoId = urlObj.searchParams.get("v");
-    if (!videoId) return;
-
-    if (currentStrategy === 'zen') {
-        openZenPopup(videoId);
-    } else {
-        openEmbeddedProxy(videoId);
-    }
-}
-
-// Strategy 1: Zen Popup
-function openZenPopup(videoId) {
-    const watchUrl = `https://www.youtube.com/watch?v=${videoId}&autoplay=1&preview_popup=1`;
-    const width = 854;
-    const height = 480;
-    const left = (window.screen.width / 2) - (width / 2);
-    const top = (window.screen.height / 2) - (height / 2);
-
-    window.open(watchUrl, "YouTubePreview", `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes,status=no,toolbar=no,menubar=no,location=yes`);
-}
-
-// Strategy 2: Embedded Proxy
-function openEmbeddedProxy(videoId) {
+// --- Helper: Construct Proxy URL ---
+function getProxyUrl(videoId) {
     let embedSrc = iframeProxyUrl;
 
     // Logic for "daltoncabrera.github.io" style proxies that expect ?v=
@@ -338,6 +328,47 @@ function openEmbeddedProxy(videoId) {
         }
         embedSrc = embedSrc + videoId + "?autoplay=1";
     }
+    return embedSrc;
+}
+
+// --- Dispatcher ---
+function openPreview(videoUrl) {
+    const urlObj = new URL(videoUrl, "https://www.youtube.com");
+    // Use our robust extractor to ensure we catch shorts URLs too if passed here
+    // (Although usually we extract before calling this, safe to re-check)
+    const videoId = extractVideoId(videoUrl) || urlObj.searchParams.get("v");
+    if (!videoId) return;
+
+    if (currentStrategy === 'zen') {
+        openZenPopup(videoId);
+    } else {
+        openEmbeddedProxy(videoId);
+    }
+}
+
+// Strategy 1: Zen Popup (Optimized: Uses Proxy)
+function openZenPopup(videoId) {
+    // NEW: Use the lightweight proxy
+    let proxyUrl = getProxyUrl(videoId);
+
+    // Ensure autoplay is passed to the proxy
+    if (proxyUrl.includes('?')) {
+        proxyUrl += '&autoplay=1';
+    } else {
+        proxyUrl += '?autoplay=1';
+    }
+
+    const width = 854;
+    const height = 480;
+    const left = (window.screen.width / 2) - (width / 2);
+    const top = (window.screen.height / 2) - (height / 2);
+
+    window.open(proxyUrl, "YouTubePreview", `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes,status=no,toolbar=no,menubar=no,location=yes`);
+}
+
+// Strategy 2: Embedded Proxy
+function openEmbeddedProxy(videoId) {
+    const embedSrc = getProxyUrl(videoId);
 
     // Check for existing overlay
     const existingOverlay = document.querySelector('.yt-preview-embed-overlay');
