@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Preview Host</title>
+    <title>YouTube Preview Popup - Chrome Extension</title>
     <style>
         body,
         html {
@@ -12,17 +12,17 @@
             padding: 0;
             width: 100%;
             height: 100%;
-            overflow: hidden;
-            background-color: black;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            background-color: #0f0f0f;
+            color: white;
         }
 
+        /* --- Player Styles --- */
         #player-container {
             width: 100%;
             height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            display: none;
+            /* Hidden by default, shown by JS */
         }
 
         iframe {
@@ -31,63 +31,149 @@
             border: none;
         }
 
-        .error {
-            color: #fff;
+        /* --- Landing Page Styles --- */
+        #landing-page {
+            display: none;
+            /* Hidden by default, shown by JS */
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
             text-align: center;
+            padding: 20px;
+            background: radial-gradient(circle at center, #2a2a2a 0%, #000 100%);
         }
 
-        .error h2 {
-            font-weight: normal;
-            margin-bottom: 10px;
+        .hero-icon {
+            width: 120px;
+            height: 120px;
+            background: #ff0000;
+            border-radius: 25px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 10px 30px rgba(255, 0, 0, 0.3);
+            margin-bottom: 30px;
         }
 
-        .error p {
+        .hero-icon svg {
+            width: 70px;
+            height: 70px;
+            fill: white;
+        }
+
+        h1 {
+            font-size: 3em;
+            margin: 0 0 10px 0;
+            letter-spacing: -1px;
+        }
+
+        p {
+            font-size: 1.2em;
             color: #aaa;
-            font-size: 14px;
+            max-width: 600px;
+            margin: 0 auto 40px auto;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 15px 30px;
+            background: #3ea6ff;
+            color: white;
+            text-decoration: none;
+            font-weight: bold;
+            border-radius: 30px;
+            font-size: 1.1em;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(62, 166, 255, 0.4);
+        }
+
+        .footer {
+            margin-top: 60px;
+            font-size: 0.9em;
+            color: #555;
+        }
+
+        .footer a {
+            color: #777;
+            text-decoration: none;
+            margin: 0 10px;
+        }
+
+        .footer a:hover {
+            color: #aaa;
+        }
+
+        /* Mobile Adjustment */
+        @media (max-width: 600px) {
+            h1 {
+                font-size: 2em;
+            }
         }
     </style>
 </head>
 
 <body>
-    <div id="player-container">
-        <!-- Iframe will be injected here -->
+
+    <!-- PLAYER MODE CONTAINER -->
+    <div id="player-container"></div>
+
+    <!-- LANDING PAGE CONTAINER -->
+    <div id="landing-page">
+        <div class="hero-icon">
+            <!-- Simple Eye/Play Icon SVG -->
+            <svg viewBox="0 0 24 24">
+                <path
+                    d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zm0 13a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11zm0-9a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z" />
+                <path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" fill="none" />
+                <polygon points="11,10 14,12 11,14" fill="white" />
+            </svg>
+        </div>
+        <h1>YouTube Preview Popup</h1>
+        <p>Watch videos without leaving your search. The sleekest way to browse YouTube.</p>
+
+        <a href="https://github.com/daltoncabrera/chrome-youtube-preview" class="btn">View on GitHub</a>
+
+        <div class="footer">
+            <a href="privacy.html">Privacy Policy</a>
+            &bull;
+            <a href="https://github.com/daltoncabrera">Contact</a>
+        </div>
     </div>
 
     <script>
-        // Logic to extract Video ID and render standard YouTube Embed
-        // Using standard domain is best for public servers.
-
         function getQueryParam(param) {
             const urlParams = new URLSearchParams(window.location.search);
             return urlParams.get(param);
         }
 
         const videoId = getQueryParam('v');
-        const container = document.getElementById('player-container');
+        const playerContainer = document.getElementById('player-container');
+        const landingContainer = document.getElementById('landing-page');
 
         if (videoId) {
-            const iframe = document.createElement('iframe');
+            // --- PLAYER MODE ---
+            playerContainer.style.display = 'block';
 
-            // Standard YouTube Embed URL
-            // Removed mute=1 per user request. 
-            // Note: Autoplay with sound might be blocked by some browsers until user interacts with domain.
+            const iframe = document.createElement('iframe');
+            // Autoplay enabled, no mute (user preference)
             const src = `https://www.youtube.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1`;
 
             iframe.src = src;
             iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
             iframe.allowFullscreen = true;
-
-            // Standard referrer policy for external sites
             iframe.referrerPolicy = "strict-origin-when-cross-origin";
 
-            container.appendChild(iframe);
+            playerContainer.appendChild(iframe);
+            document.title = "Video Preview"; // Change title for player
+
         } else {
-            container.innerHTML = `
-                <div class="error">
-                    <h2>Waiting for Video...</h2>
-                    <p>Pass a video ID using ?v=ID</p>
-                </div>
-            `;
+            // --- LANDING PAGE MODE ---
+            landingContainer.style.display = 'flex';
         }
     </script>
 </body>

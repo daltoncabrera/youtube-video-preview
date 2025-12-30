@@ -1,51 +1,49 @@
 # YouTube Preview Popup 🎥
 
-**Una extensión de Chrome para previsualizar videos de YouTube sin interrupciones.**
+**A Chrome extension to preview YouTube videos without interruptions.**
 
-## 💡 ¿Por qué surge este proyecto?
+## 💡 Why this project?
 
-El objetivo principal es **mejorar la experiencia de previsualización nativa de YouTube**.
+The main goal is to **improve the native YouTube preview experience**.
 
-Aunque YouTube ofrece una vista previa básica al pasar el mouse, esta suele ser limitada. Este proyecto nace para ofrecer una solución más robusta: visualizar el video completo, con sonido y control total, **sin necesidad de abrirlo ni perder la ventana actual**.
+Although YouTube offers a basic preview when hovering, it is often limited. This project was born to offer a more robust solution: visualizing the full video, with sound and full control, **without needing to open it or lose the current window**.
 
-Es una herramienta de productividad personal diseñada para navegar de forma más fluida, evitando abrir pestañas innecesarias y manteniendo el contexto de tu búsqueda.
+It is a personal productivity tool designed to navigate more fluidly, avoiding opening unnecessary tabs and maintaining the context of your search.
 
-## ✨ Características Principales
+## ✨ Main Features
 
-*   **Preview "In-Place" (Incrustado):** Abre una ventana flotante sobre la misma página.
-    *   🛑 **Sin salir de la web:** El video se reproduce encima.
-    *   📏 **Redimensionable y Arrastrable:** Colócalo donde quieras.
-    *   💾 **Persistencia:** Recuerda el tamaño y posición que le diste para el siguiente video.
-    *   🔄 **Actualización Inteligente:** Si haces click en otro video, el reproductor volador se actualiza instantáneamente sin cerrarse.
-*   **Posicionamiento Inteligente:** Configura dónde quieres que aparezca el botón de "Preview" (Top-Left, Top-Right, Center) para evitar conflictos con los botones nativos de YouTube ("Ver más tarde", etc.).
-*   **Modo Zen (Alternativo):** Opción para abrir el video en una ventana popup nativa sin distracciones (sin comentarios, sin barra lateral, solo video).
-*   **Bypass de Restricciones:** Utiliza una estrategia de Proxy Hosted inteligente para evitar los bloqueos de "embed" de YouTube en extensiones.
+*   **"In-Place" Preview:** Opens a floating window over the same page.
+    *   🛑 **Without leaving the web:** The video plays on top.
+    *   📏 **Resizable and Draggable:** Place it wherever you want.
+    *   💾 **Persistence:** Remembers the size and position you gave it for the next video.
+    *   🔄 **Smart Update:** If you click on another video, the floating player updates instantly without closing.
+*   **Smart Positioning:** Configure where you want the "Preview" button to appear (Top-Left, Top-Right, Center) to avoid conflicts with native YouTube buttons ("Watch Later", etc.).
+*   **Zen Mode (Alternative):** Option to open the video in a native popup window without distractions (no comments, no sidebar, just video).
+*   **Restriction Bypass:** Uses a smart Hosted Proxy strategy to avoid YouTube "embed" blocks in extensions.
 
-## 🛠️ Instalación (Modo Desarrollador)
+## 🛠️ Installation (Developer Mode)
 
-1.  Clona o descarga este repositorio.
-2.  Abre Google Chrome y ve a `chrome://extensions/`.
-3.  Activa el "Modo de desarrollador" (arriba a la derecha).
-4.  Haz click en "Cargar descomprimida" (Load unpacked).
-5.  Selecciona la carpeta `youtube_preview_popup` de este proyecto.
-6.  ¡Listo! Verás el botón "Preview" al pasar el mouse sobre cualquier miniatura en YouTube.
+1.  Clone or download this repository.
+2.  Open Google Chrome and go to `chrome://extensions/`.
+3.  Activate "Developer mode" (top right).
+4.  Click on "Load unpacked".
+5.  Select the `youtube_preview_popup` folder of this project.
+6.  Ready! You will see the "Preview" button when hovering over any thumbnail on YouTube.
 
-## ⚙️ Configuración
+## ⚙️ Configuration
 
-Haz click en el icono de la extensión (el ojo rojo 👁️) para acceder al menú de opciones:
+Click on the extension icon (the red eye 👁️) to access the options menu:
 
-*   **Strategy:** Elige entre "Embedded Proxy" (Recomendado) o "Zen Window".
-*   **Button Position:** Decide dónde aparece el botón de preview en las miniaturas.
-*   **Default Size/Location:** Define el tamaño y posición inicial del reproductor flotante.
-
+*   **Strategy:** Choose between "Embedded Proxy" (Recommended) or "Zen Window".
+*   **Button Position:** Decide where the preview button appears on thumbnails.
+*   **Default Size/Location:** Define the initial size and position of the floating player.
 
 ## ☕ Buy me a Coffee
 
-Si encuentras útil esta extensión y quieres apoyar su desarrollo:
-
+If you find this extension useful and want to support its development:
 
 [![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.com/donate/?hosted_button_id=XM558AC2VE3Z6)
 
 ---
 
-> **Nota:** Este proyecto ha sido desarrollado con la asistencia de **Antigravity** (Google DeepMind).
+> **Note:** This project has been developed with the assistance of **Antigravity** (Google DeepMind).

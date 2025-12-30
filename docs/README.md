@@ -1,29 +1,29 @@
 # YouTube Embed Host
 
-Este es un proyecto minimalista diseñado para servir como "Proxy de Reproducción" para la extensión **Youtube Preview Popup**.
+This is a minimalist project designed to serve as a "Playback Proxy" for the **Youtube Preview Popup** extension.
 
-## ¿Para qué sirve?
-Al alojar este archivo en un servidor público (fuera de la extensión), "engañamos" a las restricciones de YouTube, ya que el video se cargará como si estuviera en una web normal (como un blog o noticia), lo cual está permitido.
+## What is it for?
+By hosting this file on a public server (outside the extension), we "bypass" YouTube's restrictions, as the video will load as if it were on a normal website (like a blog or news site), which is allowed.
 
-## Cómo usarlo
+## How to use it
 
-### 1. Despliegue (Opción Recomendada: Vercel/Netlify)
-Es gratis y toma 1 minuto.
+### 1. Deployment (Recommended Option: Vercel/Netlify)
+It's free and takes 1 minute.
 
-1.  Sube esta carpeta a GitHub (o arrástrala al dashboard de Netlify).
-2.  Obtén la URL pública (ej: `https://mi-proxy-youtube.vercel.app`).
+1.  Upload this folder to GitHub (or drag it to the Netlify dashboard).
+2.  Get the public URL (e.g. `https://my-youtube-proxy.vercel.app`).
 
-### 2. Configuración en la Extensión
-1.  Abre la configuración de la extensión **Youtube Preview Popup**.
-2.  Selecciona la estrategia **"Embedded Proxy Player"**.
-3.  En el campo "Proxy Server URL", pega tu URL seguido de `?v=`.
-    *   **Ejemplo:** `https://mi-proxy-youtube.vercel.app/?v=`
-    *   **Nota:** Es importante que termine en `?v=` o `/?v=` para que la extensión añada el ID del video a continuación.
+### 2. Extension Configuration
+1.  Open the settings of the **Youtube Preview Popup** extension.
+2.  Select the **"Embedded Proxy Player"** strategy.
+3.  In the "Proxy Server URL" field, paste your URL followed by `?v=`.
+    *   **Example:** `https://my-youtube-proxy.vercel.app/?v=`
+    *   **Note:** It is important that it ends in `?v=` or `/?v=` so that the extension adds the video ID afterwards.
 
-## Estructura
-*   `index.html`: Contiene la lógica para leer el parámetro `?v=VIDEO_ID` y renderizar el iframe de YouTube con los permisos correctos.
+## Structure
+*   `index.html`: Contains the logic to read the `?v=VIDEO_ID` parameter and render the YouTube iframe with the correct permissions.
 
-## Pruebas
-Puedes probar que funcione visitando:
-`https://TU-DOMINIO.com/?v=dQw4w9WgXcQ`
-(Debería cargar el video automáticamente).
+## Testing
+You can test that it works by visiting:
+`https://YOUR-DOMAIN.com/?v=dQw4w9WgXcQ`
+( It should load the video automatically).
