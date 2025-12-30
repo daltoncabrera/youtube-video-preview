@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>YouTube Preview Settings</title>
+    <style>
+        body {
+            width: 300px;
+            font-family: Arial, sans-serif;
+            padding: 15px;
+            background-color: #202020;
+            color: #fff;
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 16px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 10px;
+        }
+
+        .option-group {
+            margin-bottom: 15px;
+        }
+
+        .radio-label {
+            display: block;
+            margin-bottom: 8px;
+            cursor: pointer;
+        }
+
+        .radio-label input {
+            margin-right: 8px;
+        }
+
+        .sub-option {
+            margin-left: 25px;
+            margin-top: 5px;
+            display: none;
+        }
+
+        .sub-option.visible {
+            display: block;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 5px;
+            box-sizing: border-box;
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            border-radius: 3px;
+            margin-top: 5px;
+        }
+
+        #save-status {
+            color: #4CAF50;
+            font-size: 12px;
+            margin-top: 10px;
+            height: 15px;
+        }
+
+        .info {
+            font-size: 11px;
+            color: #aaa;
+            margin-top: 2px;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Preview Settings</h2>
+
+    <div class="option-group">
+        <label class="radio-label">
+            <input type="radio" name="strategy" value="zen" checked>
+            Zen Popup Window (Recommended)
+        </label>
+        <div class="info" style="margin-left: 25px;">Opens a clean Native Window. 100% Reliability.</div>
+    </div>
+
+    <div class="option-group">
+        <label class="radio-label">
+            <input type="radio" name="strategy" value="embed">
+            Embedded Proxy Player
+        </label>
+        <div class="info" style="margin-left: 25px;">Injects into page. Requires valid proxy to bypass blocks.</div>
+
+        <div id="embed-settings" class="sub-option">
+            <label>Proxy Server URL:</label>
+            <input type="text" id="proxy-url" value="https://www.youtube-nocookie.com/embed/">
+            <div class="info">Try 'https://yewtu.be/embed/' if default fails.</div>
+        </div>
+    </div>
+
+    <div id="save-status"></div>
+
+    <script src="popup.js"></script>
+</body>
+
+</html>
