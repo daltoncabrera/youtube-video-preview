@@ -1,9 +1,7 @@
 /* Button injected into the thumbnail */
 .yt-preview-button {
     position: absolute;
-    top: 8px;
-    /* Slightly more offset */
-    right: 8px;
+    /* Default is overridden by specific classes */
     background-color: rgba(28, 28, 28, 0.9);
     color: white;
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -20,6 +18,35 @@
     pointer-events: auto;
     /* Ensure clickable */
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    isolation: isolate;
+}
+
+.yt-preview-button.top-left {
+    top: 8px;
+    left: 8px;
+    right: auto;
+    bottom: auto;
+}
+
+.yt-preview-button.top-right {
+    top: 8px;
+    right: 8px;
+    left: auto;
+    bottom: auto;
+}
+
+.yt-preview-button.bottom-left {
+    bottom: 8px;
+    left: 8px;
+    top: auto;
+    right: auto;
+}
+
+.yt-preview-button.bottom-right {
+    bottom: 8px;
+    right: 8px;
+    top: auto;
+    left: auto;
 }
 
 /* 

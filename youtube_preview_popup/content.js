@@ -32,19 +32,21 @@ const BUTTON_TEXT = "Preview";
 const Z_INDEX_POPUP = 2147483647;
 
 // --- Load Settings ---
-let currentStrategy = 'zen'; // Default
+let currentStrategy = 'embed'; // Default
 let iframeProxyUrl = 'https://daltoncabrera.github.io/youtube-video-preview';
 let defSize = 'small';
 let defPos = 'bottom-right';
+let btnPos = 'top-left'; // Button Default
 
 function loadSettings() {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos'], (result) => {
+        chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos'], (result) => {
             if (result.strategy) currentStrategy = result.strategy;
             if (result.proxyUrl) iframeProxyUrl = result.proxyUrl;
             if (result.defSize) defSize = result.defSize;
             if (result.defPos) defPos = result.defPos;
-            console.log(`[Debug] Strategy loaded: ${currentStrategy}, Proxy: ${iframeProxyUrl}, Size: ${defSize}, Pos: ${defPos}`);
+            if (result.btnPos) btnPos = result.btnPos;
+            console.log(`[Debug] Settings loaded. BtnPos: ${btnPos}`);
         });
     } else {
         console.warn("[Warning] chrome.storage.local not available. Using default 'Zen Mode'.");
@@ -60,6 +62,10 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
             if (changes.proxyUrl) iframeProxyUrl = changes.proxyUrl.newValue;
             if (changes.defSize) defSize = changes.defSize.newValue;
             if (changes.defPos) defPos = changes.defPos.newValue;
+            if (changes.btnPos) {
+                btnPos = changes.btnPos.newValue;
+                updateAllButtonPositions();
+            }
 
             // Apply Live Updates to Active Overlay
             const overlay = document.querySelector('.yt-preview-embed-overlay');
@@ -75,6 +81,19 @@ if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged)
                 });
             }
         }
+    });
+}
+
+function updateAllButtonPositions() {
+    const buttons = document.querySelectorAll(`.${PREVIEW_BTN_CLASS}`);
+    buttons.forEach(btn => {
+        // Remove known position classes
+        btn.classList.remove('top-left', 'top-right', 'bottom-left', 'bottom-right');
+        // Add new one
+        btn.classList.add(btnPos);
+
+        // Dynamic re-adjustment for bottom positions
+        adjustButtonPosition(btn, btn.parentElement);
     });
 }
 
@@ -130,7 +149,8 @@ function processThumbnails() {
     const links = document.querySelectorAll('a[href*="/watch?v="]');
 
     links.forEach((anchor) => {
-        if (anchor.querySelector(`.${PREVIEW_BTN_CLASS}`) || anchor.parentElement.querySelector(`.${PREVIEW_BTN_CLASS}`)) return;
+        // Obsolete checks removed to ensure we update recycled DOM elements
+        // if (anchor.querySelector(`.${PREVIEW_BTN_CLASS}`) ... ) return;
 
         const hasImg = anchor.querySelector('img') || anchor.querySelector('yt-image');
         const parentThumbnail = anchor.closest('ytd-thumbnail') || anchor.closest('#thumbnail');
@@ -144,52 +164,49 @@ function processThumbnails() {
         const hiddenParent = target.closest('[aria-hidden="true"]');
         if (hiddenParent) hiddenParent.removeAttribute("aria-hidden");
 
-        if (target.querySelector(`.${PREVIEW_BTN_CLASS}`)) return;
-
+        // Always attempt to create/update button
         createPreviewButton(anchor, anchor.getAttribute("href"));
     });
 }
 
 // --- Button Injection ---
+// --- Button Injection ---
 function createPreviewButton(targetContainer, videoUrl) {
     // Determine the most stable parent to inject into.
-    // YouTube replaces contents of ytd-thumbnail, so we want to inject into the "Card" renderer if possible.
     const card = targetContainer.closest('ytd-rich-item-renderer')
         || targetContainer.closest('ytd-grid-video-renderer')
         || targetContainer.closest('ytd-compact-video-renderer')
-        || targetContainer.closest('ytd-video-renderer'); // Search results
+        || targetContainer.closest('ytd-video-renderer');
 
-    // If we find a stable card, use it. Otherwise fallback to targetContainer (thumbnail)
     const container = card || targetContainer;
-
-    // Check if button already exists in this container
-    if (container.querySelector(`.${PREVIEW_BTN_CLASS}`)) return;
-
     const videoId = extractVideoId(videoUrl);
     if (!videoId) return;
 
-    const button = document.createElement("button");
-    button.className = PREVIEW_BTN_CLASS;
-    button.innerText = "Preview";
+    // Check if button already exists in this container
+    let button = container.querySelector(`.${PREVIEW_BTN_CLASS}`);
 
-    // Style adjustments for Card injection vs Thumbnail injection
+    if (button) {
+        // CRITICAL FIX: YouTube recycles DOM elements. 
+        // We must update the button's video ID even if it exists.
+        if (button.dataset.videoId !== videoId) {
+            button.dataset.videoId = videoId;
+        }
+        return;
+    }
+
+    button = document.createElement("button");
+    button.className = PREVIEW_BTN_CLASS;
+    button.classList.add(btnPos); // Apply configured position
+    button.innerText = "Preview";
+    button.dataset.videoId = videoId; // Store ID for dynamic retrieval
+
+    // Style adjustments...
     if (card) {
-        // If injecting into card, we need to position it over the thumbnail manually.
-        // Usually the thumbnail is the first child or distinct.
-        // We can just set Top/Right of the card.
-        // Ensure card is relative
         const style = window.getComputedStyle(container);
         if (style.position === 'static') {
             container.style.position = 'relative';
         }
-        // Specific adjustments might be needed, but Top-Right of card is usually Top-Right of thumbnail roughly.
-        // However, standard thumbnails have margin.
-        // To be safe, let's stick to the TOP RIGHT of the container.
-        // But for 'ytd-rich-item-renderer', top right is above the video.
-        // This is fine, or even better.
-        button.style.zIndex = '2147483647';
     } else {
-        // Fallback styling
         const style = window.getComputedStyle(container);
         if (style.position === 'static') {
             container.style.position = 'relative';
@@ -199,12 +216,50 @@ function createPreviewButton(targetContainer, videoUrl) {
     button.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        openPreview(videoUrl);
+        // Read the LATEST video ID from the button attribute
+        const currentId = e.currentTarget.dataset.videoId;
+        if (currentId) {
+            openPreview(`https://www.youtube.com/watch?v=${currentId}`);
+        }
     });
 
     container.appendChild(button);
 
-    // Safety: If somehow it's removed, we rely on the global observer/mouseenter to re-trigger processThumbnails
+    // Apply initial positioning logic
+    adjustButtonPosition(button, container);
+
+    // Safety...
+}
+
+function adjustButtonPosition(button, container) {
+    // Reset manual styles first to allow CSS classes to work for Top positions
+    button.style.top = '';
+    button.style.bottom = '';
+    button.style.left = '';
+    button.style.right = '';
+    button.style.zIndex = '2147483647'; // Ensure max z-index
+
+    // If it's a "Bottom" position AND we are inside a Card (meaning container is tall),
+    // we need to anchor to the Thumbnail height manually.
+    if (btnPos.startsWith('bottom')) {
+        const thumbnail = container.querySelector('ytd-thumbnail') || container.querySelector('#thumbnail');
+        if (thumbnail && thumbnail.offsetHeight > 0) {
+            // Calculate Top offset to place it at the bottom of the thumbnail
+            const offset = thumbnail.offsetHeight - 40; // 40px up from bottom of image
+
+            button.style.top = offset + 'px';
+            button.style.bottom = 'auto';
+
+            // Explicitly enforce Left/Right properties based on pos
+            if (btnPos === 'bottom-left') {
+                button.style.left = '8px';
+                button.style.right = 'auto'; // Clear right
+            } else {
+                button.style.right = '8px';
+                button.style.left = 'auto'; // Clear left
+            }
+        }
+    }
 }
 
 // Helper to extract video ID

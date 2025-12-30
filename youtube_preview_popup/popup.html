@@ -70,24 +70,34 @@
 </head>
 
 <body>
-    <h2>Preview Settings</h2>
+    <h2>YouTube Preview</h2>
+
+    <div class="option-group">
+        <label style="display: block; margin-bottom: 5px;">Button Position:</label>
+        <select id="btn-pos"
+            style="width: 100%; padding: 5px; background: #333; color: white; border: 1px solid #555; margin-bottom: 15px;">
+            <option value="top-left">Top Left (Default)</option>
+            <option value="top-right">Top Right</option>
+            <option value="center">Center</option>
+        </select>
+    </div>
 
     <div class="option-group">
         <label class="radio-label">
-            <input type="radio" name="strategy" value="zen" checked>
-            Zen Popup Window (Recommended)
+            <input type="radio" name="strategy" value="zen">
+            Zen Popup Window
         </label>
         <div class="info" style="margin-left: 25px;">Opens a clean Native Window. 100% Reliability.</div>
     </div>
 
     <div class="option-group">
         <label class="radio-label">
-            <input type="radio" name="strategy" value="embed">
-            Embedded Proxy Player
+            <input type="radio" name="strategy" value="embed" checked>
+            Embedded Proxy Player (Recommended)
         </label>
         <div class="info" style="margin-left: 25px;">Injects into page. Requires valid proxy to bypass blocks.</div>
 
-        <div id="embed-settings" class="sub-option">
+        <div id="embed-settings" class="sub-option visible">
             <label>Proxy Server URL:</label>
             <input type="text" id="proxy-url" value="https://daltoncabrera.github.io/youtube-video-preview">
 

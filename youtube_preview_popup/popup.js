@@ -5,11 +5,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const proxyInput = document.getElementById('proxy-url');
     const sizeSelect = document.getElementById('def-size');
     const posSelect = document.getElementById('def-pos');
+    const btnPosSelect = document.getElementById('btn-pos');
     const status = document.getElementById('save-status');
 
     // Load saved settings
-    chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos'], (result) => {
-        if (result.strategy === 'embed') {
+    chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos'], (result) => {
+        // Default to 'embed' if not set
+        const strategy = result.strategy || 'embed';
+
+        if (strategy === 'embed') {
             embedRadio.checked = true;
             embedSettings.classList.add('visible');
         } else {
@@ -20,6 +24,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (result.proxyUrl) proxyInput.value = result.proxyUrl;
         if (result.defSize) sizeSelect.value = result.defSize;
         if (result.defPos) posSelect.value = result.defPos;
+        if (result.btnPos) btnPosSelect.value = result.btnPos;
+        else btnPosSelect.value = 'top-left'; // Default
     });
 
     // Handle Radio Change
@@ -39,6 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
     proxyInput.addEventListener('input', () => debounceSave());
     sizeSelect.addEventListener('change', triggerSave);
     posSelect.addEventListener('change', triggerSave);
+    btnPosSelect.addEventListener('change', triggerSave);
 
     let timeout;
     function debounceSave() {
@@ -49,15 +56,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function triggerSave() {
         // Correct strategy logic based on radio
         const strategy = embedRadio.checked ? 'embed' : 'zen';
-        saveSettings(strategy, proxyInput.value, sizeSelect.value, posSelect.value);
+        saveSettings(strategy, proxyInput.value, sizeSelect.value, posSelect.value, btnPosSelect.value);
     }
 
-    function saveSettings(strategy, proxyUrl, size, pos) {
+    function saveSettings(strategy, proxyUrl, size, pos, btnPos) {
         chrome.storage.local.set({
             strategy: strategy,
             proxyUrl: proxyUrl,
             defSize: size,
-            defPos: pos
+            defPos: pos,
+            btnPos: btnPos
         }, () => {
             status.textContent = "Saved!";
             setTimeout(() => { status.textContent = ""; }, 1000);
