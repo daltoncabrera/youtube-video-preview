@@ -155,26 +155,60 @@
         const playerContainer = document.getElementById('player-container');
         const landingContainer = document.getElementById('landing-page');
 
+        var player;
+
         if (videoId) {
             // --- PLAYER MODE ---
             playerContainer.style.display = 'block';
 
-            const iframe = document.createElement('iframe');
+            // Load YouTube IFrame Player API code asynchronously
+            var tag = document.createElement('script');
+            tag.src = "https://www.youtube.com/iframe_api";
+            var firstScriptTag = document.getElementsByTagName('script')[0];
+            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+            // Read params
             const urlParams = new URLSearchParams(window.location.search);
-            const mute = urlParams.get('mute') || '0';
-            const autoplay = urlParams.get('autoplay') || '1';
+            const mute = urlParams.get('mute') === '1' ? 1 : 0;
+            // We ignore autoplay param here in construction because we handle it via JS API
 
-            // Autoplay enabled, configurable mute
-            const src = `https://www.youtube.com/embed/${videoId}?autoplay=${autoplay}&mute=${mute}&rel=0&modestbranding=1&playsinline=1`;
+            function onYouTubeIframeAPIReady() {
+                player = new YT.Player('player-container', {
+                    height: '100%',
+                    width: '100%',
+                    videoId: videoId,
+                    playerVars: {
+                        'playsinline': 1,
+                        'rel': 0,
+                        'modestbranding': 1,
+                        'autoplay': 1, // Attempt API autoplay
+                        'mute': mute
+                    },
+                    events: {
+                        'onReady': onPlayerReady,
+                        'onError': onPlayerError
+                    }
+                });
+            }
 
-            iframe.src = src;
-            iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
-            iframe.allowFullscreen = true;
-            iframe.referrerPolicy = "strict-origin-when-cross-origin";
+            function onPlayerReady(event) {
+                // Programmatic Click/Play attempt
+                // Most browsers block unmuted autoplay, but simulated clicks works sometimes if recent interaction
+                // Or we can try to mute first if unmuted fails
+                event.target.playVideo();
+            }
 
-            playerContainer.appendChild(iframe);
-            document.title = "Video Preview"; // Change title for player
-
+            function onPlayerError(event) {
+                // Error 150 or 101 means embed restricted
+                if (event.data === 150 || event.data === 101) {
+                    playerContainer.innerHTML = `
+                        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; color:#aaa; text-align:center;">
+                            <p style="margin-bottom:20px;">Video requires full player.</p>
+                            <a href="https://www.youtube.com/watch?v=${videoId}" target="_blank" class="btn" style="background:#cc0000; padding:10px 20px;">Open on YouTube</a>
+                        </div>
+                    `;
+                }
+            }
         } else {
             // --- LANDING PAGE MODE ---
             landingContainer.style.display = 'flex';
