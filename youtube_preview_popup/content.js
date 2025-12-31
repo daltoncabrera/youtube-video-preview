@@ -2,7 +2,7 @@
 // We check for the special flag to strip down the UI
 const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.has('preview_popup')) {
-    console.log("YouTube Preview Popup - Entering Zen Mode");
+
 
     // Inject Styles to hide clutter and maximize player
     const style = document.createElement('style');
@@ -39,7 +39,7 @@ if (urlParams.has('preview_popup')) {
 }
 
 // --- YouTube Preview Popup Content Script ---
-console.log("YouTube Preview Popup active");
+
 
 const PREVIEW_BTN_CLASS = "yt-preview-button";
 const BUTTON_TEXT = "Preview";
@@ -60,7 +60,7 @@ function loadSettings() {
             if (result.defSize) defSize = result.defSize;
             if (result.defPos) defPos = result.defPos;
             if (result.btnPos) btnPos = result.btnPos;
-            console.log(`[Debug] Settings loaded. BtnPos: ${btnPos}`);
+
         });
     } else {
         console.warn("[Warning] chrome.storage.local not available. Using default settings.");
