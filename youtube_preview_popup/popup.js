@@ -6,10 +6,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const sizeSelect = document.getElementById('def-size');
     const posSelect = document.getElementById('def-pos');
     const btnPosSelect = document.getElementById('btn-pos');
+    const autoSkipCheckbox = document.getElementById('auto-skip');
     const status = document.getElementById('save-status');
 
     // Load saved settings
-    chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos'], (result) => {
+    chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos', 'autoSkip'], (result) => {
         // Default to 'embed' if not set
         const strategy = result.strategy || 'embed';
 
@@ -26,6 +27,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (result.defPos) posSelect.value = result.defPos;
         if (result.btnPos) btnPosSelect.value = result.btnPos;
         else btnPosSelect.value = 'top-left'; // Default
+
+        // Default AutoSkip to TRUE if undefined
+        autoSkipCheckbox.checked = (result.autoSkip !== false);
     });
 
     // Handle Radio Change
@@ -46,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sizeSelect.addEventListener('change', triggerSave);
     posSelect.addEventListener('change', triggerSave);
     btnPosSelect.addEventListener('change', triggerSave);
+    autoSkipCheckbox.addEventListener('change', triggerSave);
 
     let timeout;
     function debounceSave() {
@@ -56,16 +61,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function triggerSave() {
         // Correct strategy logic based on radio
         const strategy = embedRadio.checked ? 'embed' : 'zen';
-        saveSettings(strategy, proxyInput.value, sizeSelect.value, posSelect.value, btnPosSelect.value);
+        saveSettings(strategy, proxyInput.value, sizeSelect.value, posSelect.value, btnPosSelect.value, autoSkipCheckbox.checked);
     }
 
-    function saveSettings(strategy, proxyUrl, size, pos, btnPos) {
+    function saveSettings(strategy, proxyUrl, size, pos, btnPos, autoSkip) {
         chrome.storage.local.set({
             strategy: strategy,
             proxyUrl: proxyUrl,
             defSize: size,
             defPos: pos,
-            btnPos: btnPos
+            btnPos: btnPos,
+            autoSkip: autoSkip
         }, () => {
             status.textContent = "Saved!";
             setTimeout(() => { status.textContent = ""; }, 1000);
