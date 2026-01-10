@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "Youtube Preview Popup",
     "description": "Watch and control YouTube videos in a sleek preview popup for a more immersive and cool viewing experience.",
-    "version": "1.1",
+    "version": "1.2",
     "action": {
         "default_popup": "popup.html",
         "default_icon": "icon.png"
