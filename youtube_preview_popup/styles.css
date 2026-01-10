@@ -6,9 +6,9 @@
     color: white;
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 4px;
-    padding: 4px 8px;
+    padding: 2px 6px;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 10px;
     z-index: 2147483647;
     /* Max Z-Index to stay above hover players */
     font-weight: 500;
@@ -25,10 +25,10 @@
 .yt-preview-button::after {
     content: '';
     position: absolute;
-    top: -30px;
-    bottom: -30px;
-    left: -30px;
-    right: -30px;
+    top: -10px;
+    bottom: -10px;
+    left: -10px;
+    right: -10px;
     /* Transparent but clickable */
     background: transparent;
     z-index: 1;
