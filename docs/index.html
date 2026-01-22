@@ -186,6 +186,7 @@
                     },
                     events: {
                         'onReady': onPlayerReady,
+                        'onStateChange': onPlayerStateChange,
                         'onError': onPlayerError
                     }
                 });
@@ -196,6 +197,23 @@
                 // Most browsers block unmuted autoplay, but simulated clicks works sometimes if recent interaction
                 // Or we can try to mute first if unmuted fails
                 event.target.playVideo();
+
+                // Listen for postMessage commands from parent window (PiP controls)
+                window.addEventListener('message', function(e) {
+                    if (e.data && e.data.action === 'pause') {
+                        player.pauseVideo();
+                    } else if (e.data && e.data.action === 'play') {
+                        player.playVideo();
+                    }
+                });
+            }
+
+            function onPlayerStateChange(event) {
+                // YT.PlayerState.ENDED = 0
+                if (event.data === YT.PlayerState.ENDED) {
+                    // Notify parent window that video has ended (for auto-play next)
+                    window.parent.postMessage({ action: 'videoEnded' }, '*');
+                }
             }
 
             function onPlayerError(event) {
