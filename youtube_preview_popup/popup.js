@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
+    const pipRadio = document.querySelector('input[value="pip"]');
     const zenRadio = document.querySelector('input[value="zen"]');
     const embedRadio = document.querySelector('input[value="embed"]');
     const embedSettings = document.getElementById('embed-settings');
@@ -11,10 +12,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load saved settings
     chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos', 'autoSkip'], (result) => {
-        // Default to 'embed' if not set
-        const strategy = result.strategy || 'embed';
+        // Default to 'pip' if not set
+        const strategy = result.strategy || 'pip';
 
-        if (strategy === 'embed') {
+        if (strategy === 'pip') {
+            pipRadio.checked = true;
+            embedSettings.classList.add('visible'); // PiP also uses size settings
+        } else if (strategy === 'embed') {
             embedRadio.checked = true;
             embedSettings.classList.add('visible');
         } else {
@@ -34,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Handle Radio Change
     function handleRadioChange() {
-        if (embedRadio.checked) {
+        if (embedRadio.checked || pipRadio.checked) {
             embedSettings.classList.add('visible');
         } else {
             embedSettings.classList.remove('visible');
@@ -42,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
         triggerSave();
     }
 
+    pipRadio.addEventListener('change', handleRadioChange);
     zenRadio.addEventListener('change', handleRadioChange);
     embedRadio.addEventListener('change', handleRadioChange);
 
@@ -60,7 +65,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function triggerSave() {
         // Correct strategy logic based on radio
-        const strategy = embedRadio.checked ? 'embed' : 'zen';
+        let strategy = 'pip'; // Default
+        if (embedRadio.checked) strategy = 'embed';
+        else if (zenRadio.checked) strategy = 'zen';
+        else if (pipRadio.checked) strategy = 'pip';
         saveSettings(strategy, proxyInput.value, sizeSelect.value, posSelect.value, btnPosSelect.value, autoSkipCheckbox.checked);
     }
 
