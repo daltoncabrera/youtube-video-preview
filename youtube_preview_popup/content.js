@@ -1182,7 +1182,8 @@ if (window.location.pathname.startsWith('/embed/')) {
         };
 
         // Listen for video ended message from proxy to auto-play next
-        window.addEventListener('message', (e) => {
+        // Note: The iframe posts to its parent, which is the PiP window
+        pipWindow.addEventListener('message', (e) => {
             // Verify it's a video ended event
             if (e.data && e.data.action === 'videoEnded') {
                 console.log('[AutoPlay] Video ended, checking for next...');
