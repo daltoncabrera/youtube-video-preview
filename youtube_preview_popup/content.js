@@ -170,6 +170,37 @@ if (window.location.pathname.startsWith('/embed/')) {
             return id;
         },
 
+        // Rename a list
+        async renameList(listId, newName) {
+            if (!this.lists[listId]) {
+                console.warn('[List] List not found:', listId);
+                return false;
+            }
+            this.lists[listId].name = newName;
+            await this.saveLists();
+            console.log('[List] Renamed:', listId, 'to', newName);
+            this.notifyChange();
+            return true;
+        },
+
+        // Delete a list
+        async deleteList(listId) {
+            if (!this.lists[listId]) {
+                console.warn('[List] List not found:', listId);
+                return false;
+            }
+            // If this list is active, switch to queue
+            if (this.activeSource === `list:${listId}`) {
+                this.activeSource = 'queue';
+                this.currentIndex = this.queue.length > 0 ? 0 : -1;
+            }
+            delete this.lists[listId];
+            await this.saveLists();
+            console.log('[List] Deleted:', listId);
+            this.notifyChange();
+            return true;
+        },
+
         // Get active items array
         getActiveItems() {
             if (this.activeSource === 'queue') {
@@ -235,43 +266,38 @@ if (window.location.pathname.startsWith('/embed/')) {
         },
 
         // List insert: insert after current in specified list
+        // Does NOT change active source - just adds to the list
         async listInsert(listId, videoId) {
             if (!this.lists[listId]) {
                 console.warn('[List] List not found:', listId);
                 return;
             }
 
-            // If this list is not active, activate it
-            if (this.activeSource !== `list:${listId}`) {
-                this.activeSource = `list:${listId}`;
-                this.currentIndex = this.lists[listId].items.length > 0 ? 0 : -1;
+            // If this list is the active source, insert after current position
+            if (this.activeSource === `list:${listId}`) {
+                const insertPos = Math.max(0, this.currentIndex + 1);
+                this.lists[listId].items.splice(insertPos, 0, videoId);
+            } else {
+                // Otherwise just add to end (since there's no "current position" in inactive list)
+                this.lists[listId].items.push(videoId);
             }
 
-            const insertPos = Math.max(0, this.currentIndex + 1);
-            this.lists[listId].items.splice(insertPos, 0, videoId);
-            if (this.currentIndex < 0) this.currentIndex = 0;
             await this.saveLists();
-            console.log('[List] Insert:', videoId, 'List:', this.lists[listId].items, 'Index:', this.currentIndex);
+            console.log('[List] Insert:', videoId, 'to list:', listId, 'Items:', this.lists[listId].items);
             this.notifyChange();
         },
 
         // List append: add to end of specified list
+        // Does NOT change active source - just adds to the list
         async listAppend(listId, videoId) {
             if (!this.lists[listId]) {
                 console.warn('[List] List not found:', listId);
                 return;
             }
 
-            // If this list is not active, activate it
-            if (this.activeSource !== `list:${listId}`) {
-                this.activeSource = `list:${listId}`;
-                this.currentIndex = this.lists[listId].items.length > 0 ? 0 : -1;
-            }
-
             this.lists[listId].items.push(videoId);
-            if (this.currentIndex < 0) this.currentIndex = 0;
             await this.saveLists();
-            console.log('[List] Append:', videoId, 'List:', this.lists[listId].items, 'Index:', this.currentIndex);
+            console.log('[List] Append:', videoId, 'to list:', listId, 'Items:', this.lists[listId].items);
             this.notifyChange();
         },
 
@@ -534,11 +560,10 @@ if (window.location.pathname.startsWith('/embed/')) {
     // Build dropdown HTML
     function buildDropdownHTML() {
         let html = `<div class="yt-preview-dropdown-inner">
-            <button class="yt-preview-dropdown-item primary" data-action="preview">
-                ▶ Preview
-            </button>
-            <div class="yt-preview-dropdown-divider"></div>
             <div class="yt-preview-dropdown-header">Queue</div>
+            <button class="yt-preview-dropdown-item primary" data-action="preview-now">
+                ▶ Preview Now
+            </button>
             <button class="yt-preview-dropdown-item" data-action="queue-insert">
                 ↳ Insert next
             </button>
@@ -598,31 +623,49 @@ if (window.location.pathname.startsWith('/embed/')) {
             const listId = btn.dataset.listId;
 
             switch (action) {
-                case 'preview':
-                    // Preview: clear queue and play single item
-                    PlaybackState.preview(videoId);
+                case 'preview-now':
+                    // Preview Now: insert into queue and play immediately
+                    if (PlaybackState.activeSource !== 'queue') {
+                        // Switch to queue mode, keeping current video if any
+                        PlaybackState.activeSource = 'queue';
+                        if (PlaybackState.currentVideoId && !PlaybackState.queue.includes(PlaybackState.currentVideoId)) {
+                            PlaybackState.queue = [PlaybackState.currentVideoId];
+                            PlaybackState.currentIndex = 0;
+                        } else {
+                            PlaybackState.queue = [];
+                            PlaybackState.currentIndex = -1;
+                        }
+                    }
+                    // Insert after current position
+                    const insertPos = Math.max(0, PlaybackState.currentIndex + 1);
+                    PlaybackState.queue.splice(insertPos, 0, videoId);
+                    // Move to the inserted video
+                    PlaybackState.currentIndex = insertPos;
+                    PlaybackState.currentVideoId = videoId;
+                    console.log('[Preview Now] Inserted and playing:', videoId, 'Queue:', PlaybackState.queue, 'Index:', PlaybackState.currentIndex);
+                    PlaybackState.notifyChange();
                     openPreview(`https://www.youtube.com/watch?v=${videoId}`);
                     break;
 
                 case 'queue-insert':
                     PlaybackState.queueInsert(videoId);
                     showNotification('Added to queue (next)');
-                    // If nothing playing, start playback with the first queue item
-                    if (!PlaybackState.isPlaying && PlaybackState.queue.length > 0) {
-                        PlaybackState.currentVideoId = PlaybackState.queue[PlaybackState.currentIndex];
-                        console.log('[Queue] Starting playback:', PlaybackState.currentVideoId);
-                        openPreview(`https://www.youtube.com/watch?v=${PlaybackState.currentVideoId}`);
+                    // Only start playback if nothing is currently playing
+                    if (!PlaybackState.isPlaying) {
+                        PlaybackState.currentVideoId = videoId;
+                        PlaybackState.currentIndex = PlaybackState.queue.indexOf(videoId);
+                        openPreview(`https://www.youtube.com/watch?v=${videoId}`);
                     }
                     break;
 
                 case 'queue-append':
                     PlaybackState.queueAppend(videoId);
                     showNotification('Added to queue');
-                    // If nothing playing, start playback with the first queue item
-                    if (!PlaybackState.isPlaying && PlaybackState.queue.length > 0) {
-                        PlaybackState.currentVideoId = PlaybackState.queue[PlaybackState.currentIndex];
-                        console.log('[Queue] Starting playback:', PlaybackState.currentVideoId);
-                        openPreview(`https://www.youtube.com/watch?v=${PlaybackState.currentVideoId}`);
+                    // Only start playback if nothing is currently playing
+                    if (!PlaybackState.isPlaying) {
+                        PlaybackState.currentVideoId = videoId;
+                        PlaybackState.currentIndex = PlaybackState.queue.indexOf(videoId);
+                        openPreview(`https://www.youtube.com/watch?v=${videoId}`);
                     }
                     break;
 
@@ -630,32 +673,14 @@ if (window.location.pathname.startsWith('/embed/')) {
                     await PlaybackState.listInsert(listId, videoId);
                     showNotification(`Added to ${PlaybackState.lists[listId].name}`);
                     refreshAllDropdowns();
-                    // If nothing playing, start playback
-                    if (!PlaybackState.isPlaying) {
-                        const items = PlaybackState.getActiveItems();
-                        if (items.length > 0) {
-                            PlaybackState.currentIndex = 0;
-                            PlaybackState.currentVideoId = items[0];
-                            console.log('[List] Starting playback:', PlaybackState.currentVideoId);
-                            openPreview(`https://www.youtube.com/watch?v=${items[0]}`);
-                        }
-                    }
+                    // Do NOT auto-play - just add to list
                     break;
 
                 case 'list-append':
                     await PlaybackState.listAppend(listId, videoId);
                     showNotification(`Added to ${PlaybackState.lists[listId].name}`);
                     refreshAllDropdowns();
-                    // If nothing playing, start playback
-                    if (!PlaybackState.isPlaying) {
-                        const items = PlaybackState.getActiveItems();
-                        if (items.length > 0) {
-                            PlaybackState.currentIndex = 0;
-                            PlaybackState.currentVideoId = items[0];
-                            console.log('[List] Starting playback:', PlaybackState.currentVideoId);
-                            openPreview(`https://www.youtube.com/watch?v=${items[0]}`);
-                        }
-                    }
+                    // Do NOT auto-play - just add to list
                     break;
 
                 case 'new-list':
@@ -984,13 +1009,54 @@ if (window.location.pathname.startsWith('/embed/')) {
                             background: none;
                             width: 100%;
                             text-align: left;
-                            display: block;
+                            display: flex;
+                            align-items: center;
+                            justify-content: space-between;
+                            gap: 8px;
                         }
                         .pip-source-item:hover {
                             background: rgba(255, 255, 255, 0.1);
                         }
                         .pip-source-item.active {
                             background: rgba(255, 0, 0, 0.3);
+                        }
+                        .pip-source-item.disabled {
+                            opacity: 0.4;
+                            cursor: not-allowed;
+                        }
+                        .pip-source-item.disabled:hover {
+                            background: none;
+                        }
+                        .pip-source-name {
+                            flex: 1;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            white-space: nowrap;
+                        }
+                        .pip-source-actions {
+                            display: none;
+                            gap: 4px;
+                        }
+                        .pip-source-item:hover .pip-source-actions {
+                            display: flex;
+                        }
+                        .pip-list-action {
+                            background: none;
+                            border: none;
+                            color: rgba(255, 255, 255, 0.6);
+                            cursor: pointer;
+                            font-size: 10px;
+                            padding: 2px 4px;
+                            border-radius: 3px;
+                            line-height: 1;
+                        }
+                        .pip-list-action:hover {
+                            background: rgba(255, 255, 255, 0.2);
+                            color: white;
+                        }
+                        .pip-list-action[data-action="delete"]:hover {
+                            background: rgba(255, 0, 0, 0.4);
+                            color: white;
                         }
                         .pip-queue-counter {
                             color: rgba(255, 255, 255, 0.7);
@@ -1051,18 +1117,23 @@ if (window.location.pathname.startsWith('/embed/')) {
     function buildSourceOptions() {
         const activeSource = PlaybackState.activeSource;
         let html = `<div class="pip-source-dropdown-inner">
-            <button class="pip-source-item ${activeSource === 'queue' ? 'active' : ''}" data-source="queue">
-                Queue ${PlaybackState.queue.length > 0 ? `(${PlaybackState.queue.length})` : ''}
-            </button>
+            <div class="pip-source-item ${activeSource === 'queue' ? 'active' : ''}" data-source="queue">
+                <span class="pip-source-name">Queue ${PlaybackState.queue.length > 0 ? `(${PlaybackState.queue.length})` : ''}</span>
+            </div>
         `;
 
         Object.keys(PlaybackState.lists).forEach(id => {
             const list = PlaybackState.lists[id];
             const isActive = activeSource === `list:${id}`;
+            const isEmpty = list.items.length === 0;
             html += `
-                <button class="pip-source-item ${isActive ? 'active' : ''}" data-source="list:${id}">
-                    ${list.name} (${list.items.length})
-                </button>
+                <div class="pip-source-item ${isActive ? 'active' : ''} ${isEmpty ? 'disabled' : ''}" data-source="list:${id}">
+                    <span class="pip-source-name">${list.name} ${isEmpty ? '(empty)' : `(${list.items.length})`}</span>
+                    <span class="pip-source-actions">
+                        <button class="pip-list-action" data-action="rename" data-list-id="${id}" title="Rename">✎</button>
+                        <button class="pip-list-action" data-action="delete" data-list-id="${id}" title="Delete">✕</button>
+                    </span>
+                </div>
             `;
         });
 
@@ -1151,24 +1222,179 @@ if (window.location.pathname.startsWith('/embed/')) {
             pauseBtn.title = isPaused ? 'Play (requires proxy support)' : 'Pause (requires proxy support)';
         });
 
-        // Source selection handler
+        // Source selection handler using event delegation
         function attachSourceEvents() {
             const dropdown = doc.getElementById('pip-source-dropdown');
             if (!dropdown) return;
 
-            dropdown.querySelectorAll('.pip-source-item').forEach(item => {
-                item.addEventListener('click', (e) => {
+            // Remove old listener if exists (by replacing the element with a clone)
+            const newDropdown = dropdown.cloneNode(true);
+            dropdown.parentNode.replaceChild(newDropdown, dropdown);
+
+            // Use event delegation for all clicks in dropdown
+            newDropdown.addEventListener('click', (e) => {
+                const target = e.target;
+
+                // Check if clicking on delete button
+                const deleteBtn = target.closest('.pip-list-action[data-action="delete"]');
+                if (deleteBtn) {
+                    e.preventDefault();
                     e.stopPropagation();
-                    const source = item.dataset.source;
+
+                    const listId = deleteBtn.dataset.listId;
+                    const list = PlaybackState.lists[listId];
+                    if (!list) return;
+
+                    const item = deleteBtn.closest('.pip-source-item');
+                    const nameSpan = item.querySelector('.pip-source-name');
+                    const actionsSpan = item.querySelector('.pip-source-actions');
+
+                    // Hide name and actions, show confirmation
+                    nameSpan.style.display = 'none';
+                    actionsSpan.style.display = 'none';
+
+                    // Create confirmation UI
+                    const confirmDiv = doc.createElement('div');
+                    confirmDiv.className = 'pip-delete-confirm';
+                    confirmDiv.style.cssText = `
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                        flex: 1;
+                    `;
+                    confirmDiv.innerHTML = `
+                        <span style="font-size: 10px; color: #ff6b6b;">Delete?</span>
+                        <button class="pip-confirm-yes" style="
+                            background: #cc0000;
+                            border: none;
+                            color: white;
+                            padding: 2px 8px;
+                            border-radius: 3px;
+                            font-size: 10px;
+                            cursor: pointer;
+                        ">Yes</button>
+                        <button class="pip-confirm-no" style="
+                            background: rgba(255,255,255,0.2);
+                            border: none;
+                            color: white;
+                            padding: 2px 8px;
+                            border-radius: 3px;
+                            font-size: 10px;
+                            cursor: pointer;
+                        ">No</button>
+                    `;
+
+                    item.insertBefore(confirmDiv, actionsSpan);
+
+                    // Handle confirmation clicks
+                    confirmDiv.querySelector('.pip-confirm-yes').addEventListener('click', (ev) => {
+                        ev.stopPropagation();
+                        PlaybackState.deleteList(listId).then(() => {
+                            updateNavButtons();
+                        });
+                    });
+
+                    confirmDiv.querySelector('.pip-confirm-no').addEventListener('click', (ev) => {
+                        ev.stopPropagation();
+                        // Restore original UI
+                        confirmDiv.remove();
+                        nameSpan.style.display = '';
+                        actionsSpan.style.display = '';
+                    });
+
+                    return;
+                }
+
+                // Check if clicking on rename button
+                const renameBtn = target.closest('.pip-list-action[data-action="rename"]');
+                if (renameBtn) {
+                    e.stopPropagation();
+
+                    const listId = renameBtn.dataset.listId;
+                    const list = PlaybackState.lists[listId];
+                    if (!list) return;
+
+                    const item = renameBtn.closest('.pip-source-item');
+                    const nameSpan = item.querySelector('.pip-source-name');
+                    const actionsSpan = item.querySelector('.pip-source-actions');
+
+                    // Hide name and actions, show input
+                    nameSpan.style.display = 'none';
+                    actionsSpan.style.display = 'none';
+
+                    // Create input
+                    const input = doc.createElement('input');
+                    input.type = 'text';
+                    input.value = list.name;
+                    input.className = 'pip-rename-input';
+                    input.style.cssText = `
+                        flex: 1;
+                        background: rgba(255,255,255,0.1);
+                        border: 1px solid rgba(255,255,255,0.3);
+                        border-radius: 3px;
+                        color: white;
+                        font-size: 11px;
+                        padding: 4px 6px;
+                        outline: none;
+                    `;
+
+                    // Prevent click from bubbling
+                    input.addEventListener('click', (ev) => {
+                        ev.stopPropagation();
+                    });
+
+                    item.insertBefore(input, actionsSpan);
+                    input.focus();
+                    input.select();
+
+                    // Save on Enter or blur
+                    const saveRename = async () => {
+                        const newName = input.value.trim();
+                        if (newName && newName !== list.name) {
+                            await PlaybackState.renameList(listId, newName);
+                        }
+                        updateNavButtons();
+                    };
+
+                    input.addEventListener('keydown', (ev) => {
+                        if (ev.key === 'Enter') {
+                            ev.preventDefault();
+                            saveRename();
+                        } else if (ev.key === 'Escape') {
+                            ev.preventDefault();
+                            updateNavButtons();
+                        }
+                    });
+
+                    input.addEventListener('blur', saveRename);
+                    return;
+                }
+
+                // Check if clicking on input
+                if (target.tagName === 'INPUT') {
+                    e.stopPropagation();
+                    return;
+                }
+
+                // Check if clicking on source item (not action buttons)
+                const sourceItem = target.closest('.pip-source-item');
+                if (sourceItem && !target.closest('.pip-list-action')) {
+                    e.stopPropagation();
+
+                    // Prevent selecting disabled (empty) lists
+                    if (sourceItem.classList.contains('disabled')) {
+                        return;
+                    }
+
+                    const source = sourceItem.dataset.source;
                     PlaybackState.switchSource(source);
 
-                    // Play first item of new source
                     const items = PlaybackState.getActiveItems();
                     if (items.length > 0) {
                         navigateToVideo(items[0]);
                     }
                     updateNavButtons();
-                });
+                }
             });
         }
 
