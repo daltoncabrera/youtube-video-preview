@@ -8,6 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const posSelect = document.getElementById('def-pos');
     const btnPosSelect = document.getElementById('btn-pos');
     const autoSkipCheckbox = document.getElementById('auto-skip');
+    const repeatCheckbox = document.getElementById('repeat-mode');
+    const shuffleCheckbox = document.getElementById('shuffle-mode');
     const status = document.getElementById('save-status');
     const openPreviewBtn = document.getElementById('open-preview-btn');
 
@@ -87,7 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Load saved settings
-    chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos', 'autoSkip'], (result) => {
+    chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos', 'autoSkip', 'repeatMode', 'shuffleMode'], (result) => {
         // Default to 'pip' if not set
         const strategy = result.strategy || 'pip';
 
@@ -110,6 +112,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Default AutoSkip to TRUE if undefined
         autoSkipCheckbox.checked = (result.autoSkip !== false);
+        repeatCheckbox.checked = (result.repeatMode === true);
+        shuffleCheckbox.checked = (result.shuffleMode === true);
     });
 
     // Handle Radio Change
@@ -132,6 +136,8 @@ document.addEventListener('DOMContentLoaded', () => {
     posSelect.addEventListener('change', triggerSave);
     btnPosSelect.addEventListener('change', triggerSave);
     autoSkipCheckbox.addEventListener('change', triggerSave);
+    repeatCheckbox.addEventListener('change', triggerSave);
+    shuffleCheckbox.addEventListener('change', triggerSave);
 
     let timeout;
     function debounceSave() {
@@ -145,18 +151,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (embedRadio.checked) strategy = 'embed';
         else if (zenRadio.checked) strategy = 'zen';
         else if (pipRadio.checked) strategy = 'pip';
-        saveSettings(strategy, proxyInput.value, sizeSelect.value, posSelect.value, btnPosSelect.value, autoSkipCheckbox.checked);
+        saveSettings({
+            strategy,
+            proxyUrl: proxyInput.value,
+            defSize: sizeSelect.value,
+            defPos: posSelect.value,
+            btnPos: btnPosSelect.value,
+            autoSkip: autoSkipCheckbox.checked,
+            repeatMode: repeatCheckbox.checked,
+            shuffleMode: shuffleCheckbox.checked
+        });
     }
 
-    function saveSettings(strategy, proxyUrl, size, pos, btnPos, autoSkip) {
-        chrome.storage.local.set({
-            strategy: strategy,
-            proxyUrl: proxyUrl,
-            defSize: size,
-            defPos: pos,
-            btnPos: btnPos,
-            autoSkip: autoSkip
-        }, () => {
+    function saveSettings(settings) {
+        chrome.storage.local.set(settings, () => {
             status.textContent = "Saved!";
             setTimeout(() => { status.textContent = ""; }, 1000);
         });

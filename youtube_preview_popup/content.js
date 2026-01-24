@@ -355,33 +355,84 @@ if (window.location.pathname.startsWith('/embed/')) {
             this.notifyChange();
         },
 
-        // Navigation
+        // Navigation (respects repeatMode and shuffleMode from outer scope)
         hasNext() {
             const items = this.getActiveItems();
+            if (items.length === 0) return false;
+            // With repeat, there's always a next (loops back)
+            if (typeof repeatMode !== 'undefined' && repeatMode) return true;
             return this.currentIndex < items.length - 1;
         },
 
         hasPrevious() {
+            const items = this.getActiveItems();
+            if (items.length === 0) return false;
+            // With repeat, there's always a previous (loops back)
+            if (typeof repeatMode !== 'undefined' && repeatMode) return true;
             return this.currentIndex > 0;
         },
 
         next() {
             const items = this.getActiveItems();
+            if (items.length === 0) return null;
+
+            // Shuffle mode: pick random video (different from current if possible)
+            if (typeof shuffleMode !== 'undefined' && shuffleMode && items.length > 1) {
+                let randomIndex;
+                do {
+                    randomIndex = Math.floor(Math.random() * items.length);
+                } while (randomIndex === this.currentIndex && items.length > 1);
+                this.currentIndex = randomIndex;
+                this.currentVideoId = items[this.currentIndex];
+                return this.currentVideoId;
+            }
+
+            // Normal next
             if (this.currentIndex < items.length - 1) {
                 this.currentIndex++;
                 this.currentVideoId = items[this.currentIndex];
                 return this.currentVideoId;
             }
+
+            // Repeat mode: loop back to start
+            if (typeof repeatMode !== 'undefined' && repeatMode && items.length > 0) {
+                this.currentIndex = 0;
+                this.currentVideoId = items[0];
+                return this.currentVideoId;
+            }
+
             return null;
         },
 
         previous() {
             const items = this.getActiveItems();
+            if (items.length === 0) return null;
+
+            // Shuffle mode: pick random video
+            if (typeof shuffleMode !== 'undefined' && shuffleMode && items.length > 1) {
+                let randomIndex;
+                do {
+                    randomIndex = Math.floor(Math.random() * items.length);
+                } while (randomIndex === this.currentIndex && items.length > 1);
+                this.currentIndex = randomIndex;
+                this.currentVideoId = items[this.currentIndex];
+                return this.currentVideoId;
+            }
+
+            // Normal previous
             if (this.currentIndex > 0) {
                 this.currentIndex--;
                 this.currentVideoId = items[this.currentIndex];
                 return this.currentVideoId;
             }
+
+            // Repeat mode: loop to end
+            if (typeof repeatMode !== 'undefined' && repeatMode && items.length > 0) {
+                this.currentIndex = items.length - 1;
+                this.currentVideoId = items[this.currentIndex];
+                return this.currentVideoId;
+            }
+
             return null;
         },
 
@@ -414,16 +465,19 @@ if (window.location.pathname.startsWith('/embed/')) {
     let defSize = 'medium';
     let defPos = 'bottom-right';
     let btnPos = 'top-left'; // Button Default
+    let repeatMode = false;
+    let shuffleMode = false;
 
     function loadSettings() {
         if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos'], (result) => {
+            chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos', 'repeatMode', 'shuffleMode'], (result) => {
                 if (result.strategy) currentStrategy = result.strategy;
                 if (result.proxyUrl) iframeProxyUrl = result.proxyUrl;
                 if (result.defSize) defSize = result.defSize;
                 if (result.defPos) defPos = result.defPos;
                 if (result.btnPos) btnPos = result.btnPos;
-
+                repeatMode = result.repeatMode === true;
+                shuffleMode = result.shuffleMode === true;
             });
         } else {
             console.warn("[Warning] chrome.storage.local not available. Using default settings.");
@@ -443,6 +497,8 @@ if (window.location.pathname.startsWith('/embed/')) {
                     btnPos = changes.btnPos.newValue;
                     updateAllButtonPositions();
                 }
+                if (changes.repeatMode !== undefined) repeatMode = changes.repeatMode.newValue;
+                if (changes.shuffleMode !== undefined) shuffleMode = changes.shuffleMode.newValue;
 
                 // Apply Live Updates to Active Overlay
                 const overlay = document.querySelector('.yt-preview-embed-overlay');
@@ -1403,6 +1459,14 @@ if (window.location.pathname.startsWith('/embed/')) {
                             opacity: 0.3;
                             cursor: not-allowed;
                         }
+                        .pip-bar-btn.pip-toggle-btn {
+                            font-size: 12px;
+                            opacity: 0.5;
+                        }
+                        .pip-bar-btn.pip-toggle-btn.active {
+                            opacity: 1;
+                            color: #ff4444;
+                        }
                         .pip-bar-btn.pip-play-pause {
                             font-size: 20px;
                             padding: 6px 10px;
@@ -1493,7 +1557,8 @@ if (window.location.pathname.startsWith('/embed/')) {
                             background: rgba(255, 255, 255, 0.2);
                             color: white;
                         }
-                        .pip-list-action[data-action="delete"]:hover {
+                        .pip-list-action[data-action="delete"]:hover,
+                        .pip-list-action[data-action="clear-queue"]:hover {
                             background: rgba(255, 0, 0, 0.4);
                             color: white;
                         }
@@ -1668,6 +1733,8 @@ if (window.location.pathname.startsWith('/embed/')) {
                                         <button class="pip-bar-btn" id="pip-next" title="Next">⏭</button>
                                     </div>
                                     <div class="pip-bar-right">
+                                        <button class="pip-bar-btn pip-toggle-btn ${shuffleMode ? 'active' : ''}" id="pip-shuffle" title="Shuffle">🔀</button>
+                                        <button class="pip-bar-btn pip-toggle-btn ${repeatMode ? 'active' : ''}" id="pip-repeat" title="Repeat">🔁</button>
                                         <span class="pip-queue-counter" id="pip-counter">${PlaybackState.getPositionInfo() || ''}</span>
                                     </div>
                                 </div>
@@ -1707,9 +1774,13 @@ if (window.location.pathname.startsWith('/embed/')) {
     // Build source options HTML for PiP
     function buildSourceOptions() {
         const activeSource = PlaybackState.activeSource;
+        const queueCount = PlaybackState.queue.length;
         let html = `<div class="pip-source-dropdown-inner">
             <div class="pip-source-item ${activeSource === 'queue' ? 'active' : ''}" data-source="queue">
-                <span class="pip-source-name">Queue ${PlaybackState.queue.length > 0 ? `(${PlaybackState.queue.length})` : ''}</span>
+                <span class="pip-source-name">Queue ${queueCount > 0 ? `(${queueCount})` : ''}</span>
+                ${queueCount > 0 ? `<span class="pip-source-actions">
+                    <button class="pip-list-action" data-action="clear-queue" title="Clear queue">🗑</button>
+                </span>` : ''}
             </div>
         `;
 
@@ -1758,6 +1829,16 @@ if (window.location.pathname.startsWith('/embed/')) {
             `;
             // Re-attach source events
             attachSourceEvents();
+
+            // Update shuffle/repeat button states
+            const shuffleBtnEl = doc.getElementById('pip-shuffle');
+            const repeatBtnEl = doc.getElementById('pip-repeat');
+            if (shuffleBtnEl) {
+                shuffleBtnEl.classList.toggle('active', shuffleMode);
+            }
+            if (repeatBtnEl) {
+                repeatBtnEl.classList.toggle('active', repeatMode);
+            }
         }
 
         // Navigate to video
@@ -1769,6 +1850,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 console.log('[Nav] New iframe src:', newSrc);
                 iframe.src = newSrc;
                 updateNavButtons();
+                updateSidebar();
             } else {
                 console.log('[Nav] No video ID, nothing to navigate');
             }
@@ -1811,6 +1893,28 @@ if (window.location.pathname.startsWith('/embed/')) {
             isPaused = !isPaused;
             pauseBtn.textContent = isPaused ? '▶' : '⏸';
             pauseBtn.title = isPaused ? 'Play (requires proxy support)' : 'Pause (requires proxy support)';
+        });
+
+        // Shuffle toggle handler
+        const shuffleBtn = doc.getElementById('pip-shuffle');
+        shuffleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            shuffleMode = !shuffleMode;
+            shuffleBtn.classList.toggle('active', shuffleMode);
+            // Save to storage
+            chrome.storage.local.set({ shuffleMode });
+            updateNavButtons();
+        });
+
+        // Repeat toggle handler
+        const repeatBtn = doc.getElementById('pip-repeat');
+        repeatBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            repeatMode = !repeatMode;
+            repeatBtn.classList.toggle('active', repeatMode);
+            // Save to storage
+            chrome.storage.local.set({ repeatMode });
+            updateNavButtons();
         });
 
         // Source selection handler using event delegation
@@ -1892,6 +1996,23 @@ if (window.location.pathname.startsWith('/embed/')) {
                         nameSpan.style.display = '';
                         actionsSpan.style.display = '';
                     });
+
+                    return;
+                }
+
+                // Check if clicking on clear queue button
+                const clearQueueBtn = target.closest('.pip-list-action[data-action="clear-queue"]');
+                if (clearQueueBtn) {
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    // Clear the queue
+                    PlaybackState.queue = [];
+                    PlaybackState.currentIndex = -1;
+                    PlaybackState.currentVideoId = null;
+                    PlaybackState.notifyChange();
+                    updateNavButtons();
+                    showNotification('Queue cleared');
 
                     return;
                 }
@@ -2342,7 +2463,9 @@ if (window.location.pathname.startsWith('/embed/')) {
                 <button class="embed-pause" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;" title="Pause">⏸</button>
                 <button class="embed-next" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;" title="Next">⏭</button>
             </div>
-            <div class="embed-bar-right" style="display:flex;align-items:center;">
+            <div class="embed-bar-right" style="display:flex;align-items:center;gap:6px;">
+                <button class="embed-shuffle ${shuffleMode ? 'active' : ''}" style="background:none;border:none;color:#fff;font-size:12px;cursor:pointer;padding:4px;opacity:${shuffleMode ? '1' : '0.5'};" title="Shuffle">🔀</button>
+                <button class="embed-repeat ${repeatMode ? 'active' : ''}" style="background:none;border:none;color:#fff;font-size:12px;cursor:pointer;padding:4px;opacity:${repeatMode ? '1' : '0.5'};" title="Repeat">🔁</button>
                 <span class="embed-counter" style="font-size:11px;color:rgba(255,255,255,0.7);"></span>
             </div>
         `;
@@ -2441,9 +2564,11 @@ if (window.location.pathname.startsWith('/embed/')) {
         // Update source dropdown content
         function updateSourceDropdown() {
             const activeSource = PlaybackState.activeSource;
+            const queueCount = PlaybackState.queue.length;
             let html = `
-                <div class="embed-source-item" data-source="queue" style="padding:8px 12px;color:#fff;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:8px;${activeSource === 'queue' ? 'background:rgba(255,0,0,0.3);' : ''}">
-                    Queue ${PlaybackState.queue.length > 0 ? `(${PlaybackState.queue.length})` : ''}
+                <div class="embed-source-item" data-source="queue" style="padding:8px 12px;color:#fff;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;${activeSource === 'queue' ? 'background:rgba(255,0,0,0.3);' : ''}">
+                    <span>Queue ${queueCount > 0 ? `(${queueCount})` : ''}</span>
+                    ${queueCount > 0 ? `<button class="embed-clear-queue" style="background:none;border:none;color:rgba(255,255,255,0.6);cursor:pointer;font-size:10px;padding:2px 4px;" title="Clear queue">🗑</button>` : ''}
                 </div>
             `;
             Object.keys(PlaybackState.lists).forEach(id => {
@@ -2470,7 +2595,9 @@ if (window.location.pathname.startsWith('/embed/')) {
                         (item.dataset.source.startsWith('list:') && PlaybackState.activeSource === item.dataset.source);
                     item.style.background = isActive ? 'rgba(255,0,0,0.3)' : '';
                 });
-                item.addEventListener('click', () => {
+                item.addEventListener('click', (e) => {
+                    // Don't switch source if clicking clear queue button
+                    if (e.target.classList.contains('embed-clear-queue')) return;
                     if (item.classList.contains('disabled')) return;
                     const source = item.dataset.source;
                     PlaybackState.switchSource(source);
@@ -2483,6 +2610,22 @@ if (window.location.pathname.startsWith('/embed/')) {
                     sourceDropdown.style.display = 'none';
                 });
             });
+
+            // Add clear queue handler
+            const clearQueueBtn = sourceDropdown.querySelector('.embed-clear-queue');
+            if (clearQueueBtn) {
+                clearQueueBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    PlaybackState.queue = [];
+                    PlaybackState.currentIndex = -1;
+                    PlaybackState.currentVideoId = null;
+                    PlaybackState.notifyChange();
+                    updateSourceDropdown();
+                    updateEmbedControls(overlay);
+                    updateEmbedSidebar();
+                    showNotification('Queue cleared');
+                });
+            }
         }
 
         // Prev/Next buttons
@@ -2513,6 +2656,26 @@ if (window.location.pathname.startsWith('/embed/')) {
                 pauseBtn.textContent = isPaused ? '▶' : '⏸';
                 pauseBtn.title = isPaused ? 'Play' : 'Pause';
             }
+        });
+
+        // Shuffle toggle button
+        const shuffleBtn = overlay.querySelector('.embed-shuffle');
+        shuffleBtn.addEventListener('click', () => {
+            shuffleMode = !shuffleMode;
+            shuffleBtn.classList.toggle('active', shuffleMode);
+            shuffleBtn.style.opacity = shuffleMode ? '1' : '0.5';
+            chrome.storage.local.set({ shuffleMode });
+            updateEmbedControls(overlay);
+        });
+
+        // Repeat toggle button
+        const repeatBtn = overlay.querySelector('.embed-repeat');
+        repeatBtn.addEventListener('click', () => {
+            repeatMode = !repeatMode;
+            repeatBtn.classList.toggle('active', repeatMode);
+            repeatBtn.style.opacity = repeatMode ? '1' : '0.5';
+            chrome.storage.local.set({ repeatMode });
+            updateEmbedControls(overlay);
         });
 
         // List toggle button
@@ -2697,10 +2860,8 @@ if (window.location.pathname.startsWith('/embed/')) {
             counter.textContent = PlaybackState.getPositionInfo() || '';
         }
 
-        const items = PlaybackState.getActiveItems();
-        const hasQueue = items.length > 0;
-        const canPrev = hasQueue && PlaybackState.currentIndex > 0;
-        const canNext = hasQueue && PlaybackState.currentIndex < items.length - 1;
+        const canPrev = PlaybackState.hasPrevious();
+        const canNext = PlaybackState.hasNext();
 
         if (prevBtn) {
             prevBtn.disabled = !canPrev;
@@ -2709,6 +2870,18 @@ if (window.location.pathname.startsWith('/embed/')) {
         if (nextBtn) {
             nextBtn.disabled = !canNext;
             nextBtn.style.opacity = canNext ? '1' : '0.3';
+        }
+
+        // Update shuffle/repeat button states
+        const shuffleBtn = overlay.querySelector('.embed-shuffle');
+        const repeatBtn = overlay.querySelector('.embed-repeat');
+        if (shuffleBtn) {
+            shuffleBtn.style.opacity = shuffleMode ? '1' : '0.5';
+            shuffleBtn.classList.toggle('active', shuffleMode);
+        }
+        if (repeatBtn) {
+            repeatBtn.style.opacity = repeatMode ? '1' : '0.5';
+            repeatBtn.classList.toggle('active', repeatMode);
         }
     }
 
