@@ -9,6 +9,82 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnPosSelect = document.getElementById('btn-pos');
     const autoSkipCheckbox = document.getElementById('auto-skip');
     const status = document.getElementById('save-status');
+    const openPreviewBtn = document.getElementById('open-preview-btn');
+
+    // Handle Open Preview button click
+    openPreviewBtn.addEventListener('click', async () => {
+        // Get queue and lists from storage
+        const data = await chrome.storage.local.get(['ytPreviewQueue', 'ytPreviewLists', 'ytPreviewActiveSource', 'ytPreviewCurrentIndex']);
+
+        let videoId = null;
+        let source = null;
+        let index = 0;
+
+        const queue = data.ytPreviewQueue || [];
+        const lists = data.ytPreviewLists || {};
+        const listIds = Object.keys(lists);
+
+        // Priority: queue first, then last list
+        if (queue.length > 0) {
+            videoId = queue[0];
+            source = 'queue';
+            index = 0;
+        } else if (listIds.length > 0) {
+            // Get the last list (most recently created)
+            const lastListId = listIds[listIds.length - 1];
+            const lastList = lists[lastListId];
+            if (lastList && lastList.items && lastList.items.length > 0) {
+                videoId = lastList.items[0];
+                source = `list:${lastListId}`;
+                index = 0;
+            }
+        }
+
+        if (!videoId) {
+            status.textContent = "No videos in queue or lists";
+            status.style.color = '#ff6b6b';
+            setTimeout(() => {
+                status.textContent = "";
+                status.style.color = '#4CAF50';
+            }, 2000);
+            return;
+        }
+
+        // First check if current active tab is YouTube
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const isActiveYouTube = activeTab?.url?.includes('youtube.com');
+
+        if (isActiveYouTube) {
+            // Use current YouTube tab
+            chrome.tabs.sendMessage(activeTab.id, {
+                action: 'openPreview',
+                videoId: videoId,
+                source: source,
+                index: index
+            });
+        } else {
+            // Check for any other YouTube tab
+            const ytTabs = await chrome.tabs.query({ url: '*://*.youtube.com/*' });
+
+            if (ytTabs.length === 0) {
+                // No YouTube tab open - open YouTube with params to trigger PiP
+                chrome.tabs.create({
+                    url: `https://www.youtube.com/?ytPreviewAutoOpen=${videoId}&source=${encodeURIComponent(source)}&index=${index}`
+                });
+            } else {
+                // Send message to first YouTube tab and focus it
+                chrome.tabs.sendMessage(ytTabs[0].id, {
+                    action: 'openPreview',
+                    videoId: videoId,
+                    source: source,
+                    index: index
+                });
+                chrome.tabs.update(ytTabs[0].id, { active: true });
+            }
+        }
+
+        window.close();
+    });
 
     // Load saved settings
     chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos', 'autoSkip'], (result) => {

@@ -122,6 +122,8 @@ if (window.location.pathname.startsWith('/embed/')) {
         currentVideoId: null,
         // Lists are loaded from storage
         lists: {},
+        // Video titles cache (videoId -> title)
+        videoTitles: {},
         // Reference to current PiP window
         pipWindow: null,
         // Track if a video is currently playing (any mode)
@@ -141,12 +143,13 @@ if (window.location.pathname.startsWith('/embed/')) {
             }
         },
 
-        // Initialize lists from storage
+        // Initialize lists and titles from storage
         async loadLists() {
             if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
                 return new Promise((resolve) => {
-                    chrome.storage.local.get(['ytPreviewLists'], (result) => {
+                    chrome.storage.local.get(['ytPreviewLists', 'ytVideoTitles'], (result) => {
                         this.lists = result.ytPreviewLists || {};
+                        this.videoTitles = result.ytVideoTitles || {};
                         resolve();
                     });
                 });
@@ -160,6 +163,21 @@ if (window.location.pathname.startsWith('/embed/')) {
                     chrome.storage.local.set({ ytPreviewLists: this.lists }, resolve);
                 });
             }
+        },
+
+        // Save video title
+        async saveVideoTitle(videoId, title) {
+            this.videoTitles[videoId] = title;
+            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                return new Promise((resolve) => {
+                    chrome.storage.local.set({ ytVideoTitles: this.videoTitles }, resolve);
+                });
+            }
+        },
+
+        // Get video title
+        getVideoTitle(videoId) {
+            return this.videoTitles[videoId] || null;
         },
 
         // Create a new list
@@ -238,6 +256,14 @@ if (window.location.pathname.startsWith('/embed/')) {
                 this.queue = this.currentVideoId ? [this.currentVideoId] : [];
                 this.currentIndex = this.queue.length > 0 ? 0 : -1;
             }
+            // Remove duplicate if exists
+            const existingIdx = this.queue.indexOf(videoId);
+            if (existingIdx !== -1) {
+                this.queue.splice(existingIdx, 1);
+                if (existingIdx <= this.currentIndex) {
+                    this.currentIndex--;
+                }
+            }
             // Insert after current position (or at start if nothing playing)
             const insertPos = Math.max(0, this.currentIndex + 1);
             this.queue.splice(insertPos, 0, videoId);
@@ -256,6 +282,14 @@ if (window.location.pathname.startsWith('/embed/')) {
                 this.queue = this.currentVideoId ? [this.currentVideoId] : [];
                 this.currentIndex = this.queue.length > 0 ? 0 : -1;
             }
+            // Remove duplicate if exists
+            const existingIdx = this.queue.indexOf(videoId);
+            if (existingIdx !== -1) {
+                this.queue.splice(existingIdx, 1);
+                if (existingIdx <= this.currentIndex) {
+                    this.currentIndex--;
+                }
+            }
             this.queue.push(videoId);
             // If nothing was playing, set index to first item
             if (this.currentIndex < 0) {
@@ -273,13 +307,23 @@ if (window.location.pathname.startsWith('/embed/')) {
                 return;
             }
 
+            // Remove duplicate if exists
+            const items = this.lists[listId].items;
+            const existingIdx = items.indexOf(videoId);
+            if (existingIdx !== -1) {
+                items.splice(existingIdx, 1);
+                if (this.activeSource === `list:${listId}` && existingIdx <= this.currentIndex) {
+                    this.currentIndex--;
+                }
+            }
+
             // If this list is the active source, insert after current position
             if (this.activeSource === `list:${listId}`) {
                 const insertPos = Math.max(0, this.currentIndex + 1);
-                this.lists[listId].items.splice(insertPos, 0, videoId);
+                items.splice(insertPos, 0, videoId);
             } else {
                 // Otherwise just add to end (since there's no "current position" in inactive list)
-                this.lists[listId].items.push(videoId);
+                items.push(videoId);
             }
 
             await this.saveLists();
@@ -295,7 +339,17 @@ if (window.location.pathname.startsWith('/embed/')) {
                 return;
             }
 
-            this.lists[listId].items.push(videoId);
+            // Remove duplicate if exists
+            const items = this.lists[listId].items;
+            const existingIdx = items.indexOf(videoId);
+            if (existingIdx !== -1) {
+                items.splice(existingIdx, 1);
+                if (this.activeSource === `list:${listId}` && existingIdx <= this.currentIndex) {
+                    this.currentIndex--;
+                }
+            }
+
+            items.push(videoId);
             await this.saveLists();
             console.log('[List] Append:', videoId, 'to list:', listId, 'Items:', this.lists[listId].items);
             this.notifyChange();
@@ -339,6 +393,8 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (items.length > 0) {
                 this.currentVideoId = items[0];
             }
+            console.log('[Source] Switched to:', source, 'Items:', items.length);
+            this.notifyChange();
         },
 
         // Get position info
@@ -471,6 +527,9 @@ if (window.location.pathname.startsWith('/embed/')) {
     // Periodic cleanup/check
     setInterval(processThumbnails, 1500);
 
+    // Check for playlist panel on watch pages
+    setInterval(injectPlaylistPanelButtons, 2000);
+
     function processThumbnails() {
         const links = document.querySelectorAll('a[href*="/watch?v="], a[href*="/shorts/"]');
 
@@ -526,10 +585,14 @@ if (window.location.pathname.startsWith('/embed/')) {
             return;
         }
 
+        // Extract video title from the container
+        const videoTitle = extractVideoTitle(container);
+
         // Create wrapper element
         wrapper = document.createElement("div");
         wrapper.className = `${PREVIEW_WRAPPER_CLASS} ${btnPos}`;
         wrapper.dataset.videoId = videoId;
+        wrapper.dataset.videoTitle = videoTitle || '';
 
         // Create main button
         const mainBtn = document.createElement("button");
@@ -609,6 +672,86 @@ if (window.location.pathname.startsWith('/embed/')) {
         return html;
     }
 
+    // Helper to add single video
+    function addSingleVideo(action, videoId, videoTitle, listId) {
+        if (videoId && videoTitle) {
+            PlaybackState.saveVideoTitle(videoId, videoTitle);
+        }
+
+        switch (action) {
+            case 'queue-insert':
+                PlaybackState.queueInsert(videoId);
+                showNotification('Added to queue (next)');
+                if (!PlaybackState.isPlaying && !PlaybackState.pipWindow) {
+                    PlaybackState.currentVideoId = videoId;
+                    PlaybackState.currentIndex = PlaybackState.queue.indexOf(videoId);
+                    openPreview(`https://www.youtube.com/watch?v=${videoId}`);
+                }
+                break;
+            case 'queue-append':
+                PlaybackState.queueAppend(videoId);
+                showNotification('Added to queue');
+                if (!PlaybackState.isPlaying && !PlaybackState.pipWindow) {
+                    PlaybackState.currentVideoId = videoId;
+                    PlaybackState.currentIndex = PlaybackState.queue.indexOf(videoId);
+                    openPreview(`https://www.youtube.com/watch?v=${videoId}`);
+                }
+                break;
+            case 'list-insert':
+                PlaybackState.listInsert(listId, videoId);
+                showNotification(`Added to ${PlaybackState.lists[listId].name}`);
+                refreshAllDropdowns();
+                break;
+            case 'list-append':
+                PlaybackState.listAppend(listId, videoId);
+                showNotification(`Added to ${PlaybackState.lists[listId].name}`);
+                refreshAllDropdowns();
+                break;
+        }
+    }
+
+    // Helper to add all playlist videos
+    async function addAllPlaylistVideos(action, listId, playlistName) {
+        const videos = getPlaylistVideoIds();
+        if (videos.length === 0) {
+            showNotification('No videos found in playlist');
+            return;
+        }
+
+        // Save all titles
+        for (const v of videos) {
+            if (v.title) {
+                PlaybackState.saveVideoTitle(v.videoId, v.title);
+            }
+        }
+
+        if (action === 'new-list') {
+            // Create new list with playlist name
+            const newListId = await PlaybackState.createList(playlistName);
+            for (const v of videos) {
+                await PlaybackState.listAppend(newListId, v.videoId);
+            }
+            showNotification(`Created "${playlistName}" with ${videos.length} videos`);
+            refreshAllDropdowns();
+        } else {
+            // Add to current source (queue or active list)
+            if (PlaybackState.activeSource === 'queue' || !PlaybackState.activeSource) {
+                for (const v of videos) {
+                    PlaybackState.queueAppend(v.videoId);
+                }
+                showNotification(`Added ${videos.length} videos to queue`);
+            } else if (PlaybackState.activeSource.startsWith('list:')) {
+                const currentListId = PlaybackState.activeSource.replace('list:', '');
+                for (const v of videos) {
+                    await PlaybackState.listAppend(currentListId, v.videoId);
+                }
+                showNotification(`Added ${videos.length} videos to ${PlaybackState.lists[currentListId].name}`);
+                refreshAllDropdowns();
+            }
+        }
+        PlaybackState.notifyChange();
+    }
+
     // Setup dropdown event handlers
     function setupDropdownEvents(wrapper, dropdown) {
         dropdown.addEventListener('click', async (e) => {
@@ -620,7 +763,34 @@ if (window.location.pathname.startsWith('/embed/')) {
 
             const action = btn.dataset.action;
             const videoId = wrapper.dataset.videoId;
+            const videoTitle = wrapper.dataset.videoTitle;
             const listId = btn.dataset.listId;
+
+            // Check if this is a playlist item (for queue/list add actions)
+            const container = wrapper.closest('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, ytd-rich-item-renderer, ytd-video-renderer');
+            const videoUrl = container?.querySelector('a[href*="/watch"]')?.href || `https://www.youtube.com/watch?v=${videoId}`;
+            const playlistInfo = detectYouTubePlaylist(container, videoUrl);
+
+            // For queue/list actions, check if we should show playlist dialog
+            if (playlistInfo && ['queue-insert', 'queue-append', 'list-insert', 'list-append'].includes(action)) {
+                showPlaylistActionDialog(playlistInfo, videoId, videoTitle, async (dialogAction) => {
+                    if (!dialogAction) return; // Cancelled
+
+                    if (dialogAction === 'single') {
+                        addSingleVideo(action, videoId, videoTitle, listId);
+                    } else if (dialogAction === 'all-new') {
+                        await addAllPlaylistVideos('new-list', null, playlistInfo.name);
+                    } else if (dialogAction === 'all-current') {
+                        await addAllPlaylistVideos('current', null, null);
+                    }
+                });
+                return;
+            }
+
+            // Save video title if we have one
+            if (videoId && videoTitle) {
+                PlaybackState.saveVideoTitle(videoId, videoTitle);
+            }
 
             switch (action) {
                 case 'preview-now':
@@ -650,8 +820,8 @@ if (window.location.pathname.startsWith('/embed/')) {
                 case 'queue-insert':
                     PlaybackState.queueInsert(videoId);
                     showNotification('Added to queue (next)');
-                    // Only start playback if nothing is currently playing
-                    if (!PlaybackState.isPlaying) {
+                    // Only start playback if nothing is currently playing and no PiP window exists
+                    if (!PlaybackState.isPlaying && !PlaybackState.pipWindow) {
                         PlaybackState.currentVideoId = videoId;
                         PlaybackState.currentIndex = PlaybackState.queue.indexOf(videoId);
                         openPreview(`https://www.youtube.com/watch?v=${videoId}`);
@@ -661,8 +831,8 @@ if (window.location.pathname.startsWith('/embed/')) {
                 case 'queue-append':
                     PlaybackState.queueAppend(videoId);
                     showNotification('Added to queue');
-                    // Only start playback if nothing is currently playing
-                    if (!PlaybackState.isPlaying) {
+                    // Only start playback if nothing is currently playing and no PiP window exists
+                    if (!PlaybackState.isPlaying && !PlaybackState.pipWindow) {
                         PlaybackState.currentVideoId = videoId;
                         PlaybackState.currentIndex = PlaybackState.queue.indexOf(videoId);
                         openPreview(`https://www.youtube.com/watch?v=${videoId}`);
@@ -778,6 +948,275 @@ if (window.location.pathname.startsWith('/embed/')) {
         }
 
         return null;
+    }
+
+    // Helper to extract video title from container element
+    function extractVideoTitle(container) {
+        // For mix/playlist items, we need to be careful to get the individual video title
+        // not the playlist/mix name. The key is to look for #video-title within the
+        // item's metadata section, which always contains the specific video's title.
+
+        // Check if this is a playlist/mix item (various renderers)
+        const isPlaylistItem = container.matches('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer') ||
+            container.closest('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer');
+
+        // Check if we're on a mix/watch page with playlist panel
+        const isInMixPanel = container.closest('ytd-playlist-panel-renderer') ||
+            container.closest('ytd-watch-next-secondary-results-renderer');
+
+        // Priority 1: For playlist/mix items, get the video title from within the item itself
+        if (isPlaylistItem || isInMixPanel) {
+            // Look for the video title element within the specific video item
+            const videoTitleEl = container.querySelector('#video-title, a#video-title, [id="video-title"]');
+            if (videoTitleEl) {
+                // The title attribute has the full untruncated title
+                const title = videoTitleEl.getAttribute('title') || videoTitleEl.textContent?.trim();
+                if (title) return title;
+            }
+        }
+
+        // Priority 2: Standard video title selectors (for regular video cards)
+        const selectors = [
+            '#video-title',
+            '#video-title-link',
+            'a#video-title',
+            '[id="video-title"]',
+            'yt-formatted-string#video-title',
+            'h3 a',
+            '.title'
+        ];
+
+        for (const selector of selectors) {
+            const el = container.querySelector(selector);
+            if (el) {
+                // Prefer title attribute (has full title), then text content
+                const title = el.getAttribute('title') || el.textContent?.trim() || el.getAttribute('aria-label');
+                if (title) return title;
+            }
+        }
+
+        // Priority 3: Try aria-label on video links (extract just the video name)
+        const links = container.querySelectorAll('a[href*="/watch"], a[href*="/shorts/"]');
+        for (const link of links) {
+            const label = link.getAttribute('aria-label') || link.getAttribute('title');
+            if (label) {
+                // aria-label often contains extra info like "Video Title by Channel - 1M views - 10 minutes"
+                // Extract just the video title part (before " by ")
+                const cleanTitle = label.split(' by ')[0].trim();
+                if (cleanTitle) return cleanTitle;
+            }
+        }
+
+        // Priority 4: For mix videos on home/search pages, check parent elements
+        // Mix videos can appear as regular video cards but might have different structure
+        const parentItem = container.closest('ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer');
+        if (parentItem && parentItem !== container) {
+            const titleEl = parentItem.querySelector('#video-title, a#video-title');
+            if (titleEl) {
+                const title = titleEl.getAttribute('title') || titleEl.textContent?.trim();
+                if (title) return title;
+            }
+        }
+
+        return null;
+    }
+
+    // Helper to detect if video is part of a YouTube playlist
+    function detectYouTubePlaylist(container, videoUrl) {
+        // Guard against null container
+        if (!container) return null;
+
+        // Check if container is a playlist item
+        const isPlaylistItem = container.matches('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer') ||
+            container.closest('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer') ||
+            container.closest('ytd-playlist-video-list-renderer');
+
+        if (!isPlaylistItem) return null;
+
+        // Try to get playlist ID from URL
+        try {
+            const url = new URL(videoUrl, 'https://www.youtube.com');
+            const listId = url.searchParams.get('list');
+            if (!listId) return null;
+
+            // Get playlist name
+            let playlistName = null;
+
+            // Try to find playlist title in the page
+            const playlistTitleEl = document.querySelector(
+                'ytd-playlist-header-renderer #container h1 a, ' +
+                'ytd-playlist-header-renderer .metadata-wrapper yt-formatted-string, ' +
+                '#playlist-header h3 a, ' +
+                'ytd-playlist-panel-renderer #playlist-title, ' +
+                '#header-description h3'
+            );
+            if (playlistTitleEl) {
+                playlistName = playlistTitleEl.textContent?.trim() || playlistTitleEl.getAttribute('title');
+            }
+
+            // Count videos in playlist
+            const playlistItems = document.querySelectorAll(
+                'ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer'
+            );
+
+            return {
+                listId,
+                name: playlistName || 'YouTube Playlist',
+                videoCount: playlistItems.length
+            };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Get all video IDs from a YouTube playlist on the page
+    function getPlaylistVideoIds() {
+        const items = document.querySelectorAll(
+            'ytd-playlist-video-renderer a#video-title, ' +
+            'ytd-playlist-panel-video-renderer a#video-title'
+        );
+        const videos = [];
+        items.forEach(item => {
+            const href = item.getAttribute('href');
+            if (href) {
+                const videoId = extractVideoId(href);
+                const title = item.getAttribute('title') || item.textContent?.trim();
+                if (videoId) {
+                    videos.push({ videoId, title });
+                }
+            }
+        });
+        return videos;
+    }
+
+    // Show playlist action dialog
+    function showPlaylistActionDialog(playlistInfo, videoId, videoTitle, callback) {
+        // Remove existing dialog if any
+        const existing = document.querySelector('.yt-preview-playlist-dialog');
+        if (existing) existing.remove();
+
+        const dialog = document.createElement('div');
+        dialog.className = 'yt-preview-playlist-dialog';
+        dialog.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(28, 28, 28, 0.98);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            padding: 20px;
+            z-index: 2147483647;
+            min-width: 320px;
+            max-width: 400px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+            font-family: 'YouTube Sans', 'Roboto', sans-serif;
+        `;
+
+        dialog.innerHTML = `
+            <div style="margin-bottom: 16px;">
+                <h3 style="margin: 0 0 8px 0; color: #fff; font-size: 16px;">Playlist Detected</h3>
+                <p style="margin: 0; color: #aaa; font-size: 12px;">${playlistInfo.name} (${playlistInfo.videoCount} videos)</p>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+                <button class="dialog-btn" data-action="single" style="
+                    background: rgba(255, 255, 255, 0.1);
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                    border-radius: 6px;
+                    padding: 10px 16px;
+                    color: #fff;
+                    font-size: 13px;
+                    cursor: pointer;
+                    text-align: left;
+                ">
+                    <strong>Add this video only</strong>
+                    <span style="display: block; font-size: 11px; color: #888; margin-top: 2px;">${videoTitle || videoId}</span>
+                </button>
+                <button class="dialog-btn" data-action="all-new" style="
+                    background: rgba(255, 0, 0, 0.2);
+                    border: 1px solid rgba(255, 0, 0, 0.3);
+                    border-radius: 6px;
+                    padding: 10px 16px;
+                    color: #fff;
+                    font-size: 13px;
+                    cursor: pointer;
+                    text-align: left;
+                ">
+                    <strong>Import entire playlist</strong>
+                    <span style="display: block; font-size: 11px; color: #888; margin-top: 2px;">Create new list: "${playlistInfo.name}"</span>
+                </button>
+                <button class="dialog-btn" data-action="all-current" style="
+                    background: rgba(255, 255, 255, 0.1);
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                    border-radius: 6px;
+                    padding: 10px 16px;
+                    color: #fff;
+                    font-size: 13px;
+                    cursor: pointer;
+                    text-align: left;
+                ">
+                    <strong>Add all to current queue/list</strong>
+                    <span style="display: block; font-size: 11px; color: #888; margin-top: 2px;">Append ${playlistInfo.videoCount} videos</span>
+                </button>
+            </div>
+            <button class="dialog-cancel" style="
+                position: absolute;
+                top: 12px;
+                right: 12px;
+                background: none;
+                border: none;
+                color: #888;
+                font-size: 18px;
+                cursor: pointer;
+                padding: 4px;
+            ">✕</button>
+        `;
+
+        // Add backdrop
+        const backdrop = document.createElement('div');
+        backdrop.className = 'yt-preview-playlist-backdrop';
+        backdrop.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 2147483646;
+        `;
+
+        document.body.appendChild(backdrop);
+        document.body.appendChild(dialog);
+
+        // Handle button clicks
+        dialog.querySelectorAll('.dialog-btn').forEach(btn => {
+            btn.addEventListener('mouseenter', () => btn.style.background = 'rgba(255, 0, 0, 0.3)');
+            btn.addEventListener('mouseleave', () => {
+                if (btn.dataset.action === 'all-new') {
+                    btn.style.background = 'rgba(255, 0, 0, 0.2)';
+                } else {
+                    btn.style.background = 'rgba(255, 255, 255, 0.1)';
+                }
+            });
+            btn.addEventListener('click', () => {
+                backdrop.remove();
+                dialog.remove();
+                callback(btn.dataset.action);
+            });
+        });
+
+        // Handle cancel
+        dialog.querySelector('.dialog-cancel').addEventListener('click', () => {
+            backdrop.remove();
+            dialog.remove();
+            callback(null);
+        });
+
+        backdrop.addEventListener('click', () => {
+            backdrop.remove();
+            dialog.remove();
+            callback(null);
+        });
     }
 
     // --- Helper: Construct Proxy URL ---
@@ -932,7 +1371,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                         .pip-bar-left {
                             display: flex;
                             align-items: center;
-                            gap: 8px;
+                            gap: 4px;
                         }
                         .pip-bar-center {
                             display: flex;
@@ -1063,31 +1502,183 @@ if (window.location.pathname.startsWith('/embed/')) {
                             font-size: 11px;
                             white-space: nowrap;
                         }
+                        /* Sidebar Panel */
+                        .pip-main-wrapper {
+                            display: flex;
+                            width: 100%;
+                            height: 100%;
+                        }
+                        .pip-player-area {
+                            flex: 1;
+                            position: relative;
+                            min-width: 0;
+                        }
+                        .pip-sidebar {
+                            width: 0;
+                            background: #1a1a1a;
+                            border-left: 1px solid #333;
+                            overflow: hidden;
+                            transition: width 0.2s ease;
+                            display: flex;
+                            flex-direction: column;
+                        }
+                        .pip-sidebar.open {
+                            width: 200px;
+                        }
+                        .pip-sidebar-header {
+                            padding: 8px 10px;
+                            background: #252525;
+                            border-bottom: 1px solid #333;
+                            font-size: 11px;
+                            font-weight: 600;
+                            color: #fff;
+                            display: flex;
+                            justify-content: space-between;
+                            align-items: center;
+                        }
+                        .pip-sidebar-close {
+                            background: none;
+                            border: none;
+                            color: #888;
+                            cursor: pointer;
+                            font-size: 14px;
+                            padding: 0;
+                            line-height: 1;
+                        }
+                        .pip-sidebar-close:hover {
+                            color: #fff;
+                        }
+                        .pip-sidebar-list {
+                            flex: 1;
+                            overflow-y: auto;
+                            overflow-x: hidden;
+                        }
+                        .pip-sidebar-list::-webkit-scrollbar {
+                            width: 6px;
+                        }
+                        .pip-sidebar-list::-webkit-scrollbar-track {
+                            background: #1a1a1a;
+                        }
+                        .pip-sidebar-list::-webkit-scrollbar-thumb {
+                            background: #444;
+                            border-radius: 3px;
+                        }
+                        .pip-sidebar-list::-webkit-scrollbar-thumb:hover {
+                            background: #555;
+                        }
+                        .pip-sidebar-item {
+                            display: flex;
+                            align-items: center;
+                            padding: 6px 8px;
+                            gap: 8px;
+                            cursor: pointer;
+                            border-bottom: 1px solid #2a2a2a;
+                            transition: background 0.15s;
+                        }
+                        .pip-sidebar-item:hover {
+                            background: rgba(255, 255, 255, 0.1);
+                        }
+                        .pip-sidebar-item.active {
+                            background: rgba(255, 0, 0, 0.2);
+                        }
+                        .pip-sidebar-thumb {
+                            width: 60px;
+                            height: 34px;
+                            background: #333;
+                            border-radius: 3px;
+                            flex-shrink: 0;
+                            object-fit: cover;
+                        }
+                        .pip-sidebar-info {
+                            flex: 1;
+                            min-width: 0;
+                            display: flex;
+                            flex-direction: column;
+                            gap: 2px;
+                        }
+                        .pip-sidebar-title {
+                            font-size: 10px;
+                            color: #fff;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            display: -webkit-box;
+                            -webkit-line-clamp: 2;
+                            -webkit-box-orient: vertical;
+                            line-height: 1.3;
+                        }
+                        .pip-sidebar-delete {
+                            background: none;
+                            border: none;
+                            color: #666;
+                            cursor: pointer;
+                            font-size: 12px;
+                            padding: 4px;
+                            opacity: 0;
+                            transition: opacity 0.15s;
+                        }
+                        .pip-sidebar-item:hover .pip-sidebar-delete {
+                            opacity: 1;
+                        }
+                        .pip-sidebar-delete:hover {
+                            color: #ff4444;
+                        }
+                        .pip-sidebar-empty {
+                            padding: 20px;
+                            text-align: center;
+                            color: #666;
+                            font-size: 11px;
+                        }
+                        .pip-list-toggle {
+                            background: none;
+                            border: none;
+                            color: white;
+                            cursor: pointer;
+                            font-size: 14px;
+                            padding: 4px 6px;
+                            border-radius: 4px;
+                            margin-left: 6px;
+                        }
+                        .pip-list-toggle:hover {
+                            background: rgba(255, 255, 255, 0.2);
+                        }
                     </style>
                 </head>
                 <body>
-                    <div class="pip-container">
-                        <iframe id="pip-iframe"
-                            src="${embedSrc}"
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                            allowfullscreen>
-                        </iframe>
-                        <div class="pip-control-bar">
-                            <div class="pip-bar-left">
-                                <div class="pip-source-indicator" id="pip-source">
-                                    ${PlaybackState.getActiveSourceName()} ▼
-                                    <div class="pip-source-dropdown" id="pip-source-dropdown">
-                                        ${sourceOptions}
+                    <div class="pip-main-wrapper">
+                        <div class="pip-player-area">
+                            <div class="pip-container">
+                                <iframe id="pip-iframe"
+                                    src="${embedSrc}"
+                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                    allowfullscreen>
+                                </iframe>
+                                <div class="pip-control-bar">
+                                    <div class="pip-bar-left">
+                                        <div class="pip-source-indicator" id="pip-source">
+                                            ${PlaybackState.getActiveSourceName()} ▼
+                                            <div class="pip-source-dropdown" id="pip-source-dropdown">
+                                                ${sourceOptions}
+                                            </div>
+                                        </div>
+                                        <button class="pip-list-toggle" id="pip-list-toggle" title="Show playlist">☰</button>
+                                    </div>
+                                    <div class="pip-bar-center">
+                                        <button class="pip-bar-btn" id="pip-prev" title="Previous">⏮</button>
+                                        <button class="pip-bar-btn pip-play-pause" id="pip-pause" title="Pause (requires proxy support)">⏸</button>
+                                        <button class="pip-bar-btn" id="pip-next" title="Next">⏭</button>
+                                    </div>
+                                    <div class="pip-bar-right">
+                                        <span class="pip-queue-counter" id="pip-counter">${PlaybackState.getPositionInfo() || ''}</span>
                                     </div>
                                 </div>
                             </div>
-                            <div class="pip-bar-center">
-                                <button class="pip-bar-btn" id="pip-prev" title="Previous">⏮</button>
-                                <button class="pip-bar-btn pip-play-pause" id="pip-pause" title="Pause (requires proxy support)">⏸</button>
-                                <button class="pip-bar-btn" id="pip-next" title="Next">⏭</button>
+                        </div>
+                        <div class="pip-sidebar" id="pip-sidebar">
+                            <div class="pip-sidebar-header">
+                                <span id="pip-sidebar-title">Playlist</span>
+                                <button class="pip-sidebar-close" id="pip-sidebar-close" title="Close">✕</button>
                             </div>
-                            <div class="pip-bar-right">
-                                <span class="pip-queue-counter" id="pip-counter">${PlaybackState.getPositionInfo() || ''}</span>
+                            <div class="pip-sidebar-list" id="pip-sidebar-list">
                             </div>
                         </div>
                     </div>
@@ -1419,10 +2010,196 @@ if (window.location.pathname.startsWith('/embed/')) {
                     navigateToVideo(nextVideoId);
                 } else {
                     console.log('[AutoPlay] No more videos in queue/list');
-                    // Optionally close PiP or show end of playlist message
                 }
             }
         });
+
+        // ===== SIDEBAR FUNCTIONALITY =====
+        const sidebar = doc.getElementById('pip-sidebar');
+        const sidebarList = doc.getElementById('pip-sidebar-list');
+        const sidebarTitle = doc.getElementById('pip-sidebar-title');
+        const listToggle = doc.getElementById('pip-list-toggle');
+        const sidebarClose = doc.getElementById('pip-sidebar-close');
+
+        // Toggle sidebar
+        listToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.toggle('open');
+            if (sidebar.classList.contains('open')) {
+                updateSidebar();
+            }
+        });
+
+        // Close sidebar
+        sidebarClose.addEventListener('click', (e) => {
+            e.stopPropagation();
+            sidebar.classList.remove('open');
+        });
+
+        // Get YouTube thumbnail URL
+        function getThumbUrl(videoId) {
+            return `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+        }
+
+        // Video title cache
+        const titleCache = {};
+
+        // Fetch video title - first check stored titles, then oEmbed API
+        async function fetchVideoTitle(videoId) {
+            // Check local cache first
+            if (titleCache[videoId]) {
+                return titleCache[videoId];
+            }
+            // Check persistent storage
+            const storedTitle = PlaybackState.getVideoTitle(videoId);
+            if (storedTitle) {
+                titleCache[videoId] = storedTitle;
+                return storedTitle;
+            }
+            // Fetch from oEmbed API
+            try {
+                const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+                if (response.ok) {
+                    const data = await response.json();
+                    titleCache[videoId] = data.title;
+                    // Save to persistent storage for future use
+                    PlaybackState.saveVideoTitle(videoId, data.title);
+                    return data.title;
+                }
+            } catch (e) {
+                console.warn('[Title] Failed to fetch title for:', videoId);
+            }
+            return videoId; // Fallback to video ID
+        }
+
+        // Update sidebar content
+        function updateSidebar() {
+            const items = PlaybackState.getActiveItems();
+            sidebarTitle.textContent = PlaybackState.getActiveSourceName();
+
+            if (items.length === 0) {
+                sidebarList.innerHTML = '<div class="pip-sidebar-empty">No videos</div>';
+                return;
+            }
+
+            let html = '';
+            items.forEach((videoId, index) => {
+                const isActive = index === PlaybackState.currentIndex;
+                // Check local cache, then persistent storage
+                const cachedTitle = titleCache[videoId] || PlaybackState.getVideoTitle(videoId);
+                if (cachedTitle && !titleCache[videoId]) {
+                    titleCache[videoId] = cachedTitle; // Populate local cache
+                }
+                html += `
+                    <div class="pip-sidebar-item ${isActive ? 'active' : ''}" data-index="${index}" data-video-id="${videoId}">
+                        <img class="pip-sidebar-thumb" src="${getThumbUrl(videoId)}" alt="">
+                        <div class="pip-sidebar-info">
+                            <span class="pip-sidebar-title" data-video-id="${videoId}">${cachedTitle || 'Loading...'}</span>
+                        </div>
+                        <button class="pip-sidebar-delete" data-index="${index}" title="Remove">✕</button>
+                    </div>
+                `;
+            });
+            sidebarList.innerHTML = html;
+
+            // Fetch titles for items not in cache
+            items.forEach(async (videoId) => {
+                if (!titleCache[videoId]) {
+                    const title = await fetchVideoTitle(videoId);
+                    // Update the DOM element if it still exists
+                    const titleEl = sidebarList.querySelector(`.pip-sidebar-title[data-video-id="${videoId}"]`);
+                    if (titleEl) {
+                        titleEl.textContent = title;
+                    }
+                }
+            });
+
+            // Attach event listeners
+            sidebarList.querySelectorAll('.pip-sidebar-item').forEach(item => {
+                item.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('pip-sidebar-delete')) return;
+                    const index = parseInt(item.dataset.index);
+                    const videoId = item.dataset.videoId;
+                    PlaybackState.currentIndex = index;
+                    PlaybackState.currentVideoId = videoId;
+                    navigateToVideo(videoId);
+                    updateSidebar();
+                });
+            });
+
+            sidebarList.querySelectorAll('.pip-sidebar-delete').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const index = parseInt(btn.dataset.index);
+                    removeFromSource(index);
+                });
+            });
+
+            // Scroll active item into view
+            const activeItem = sidebarList.querySelector('.pip-sidebar-item.active');
+            if (activeItem) {
+                activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        // Remove item from current source
+        async function removeFromSource(index) {
+            const source = PlaybackState.activeSource;
+            if (source === 'queue') {
+                PlaybackState.queue.splice(index, 1);
+                // Adjust currentIndex if needed
+                if (index < PlaybackState.currentIndex) {
+                    PlaybackState.currentIndex--;
+                } else if (index === PlaybackState.currentIndex) {
+                    // Current video was removed
+                    if (PlaybackState.queue.length === 0) {
+                        PlaybackState.currentIndex = -1;
+                        PlaybackState.currentVideoId = null;
+                    } else if (index >= PlaybackState.queue.length) {
+                        PlaybackState.currentIndex = PlaybackState.queue.length - 1;
+                        PlaybackState.currentVideoId = PlaybackState.queue[PlaybackState.currentIndex];
+                        navigateToVideo(PlaybackState.currentVideoId);
+                    } else {
+                        PlaybackState.currentVideoId = PlaybackState.queue[index];
+                        navigateToVideo(PlaybackState.currentVideoId);
+                    }
+                }
+            } else if (source && source.startsWith('list:')) {
+                const listId = source.replace('list:', '');
+                const list = PlaybackState.lists[listId];
+                if (list) {
+                    list.items.splice(index, 1);
+                    await PlaybackState.saveLists();
+                    // Adjust currentIndex if needed
+                    if (index < PlaybackState.currentIndex) {
+                        PlaybackState.currentIndex--;
+                    } else if (index === PlaybackState.currentIndex) {
+                        if (list.items.length === 0) {
+                            PlaybackState.currentIndex = -1;
+                            PlaybackState.currentVideoId = null;
+                        } else if (index >= list.items.length) {
+                            PlaybackState.currentIndex = list.items.length - 1;
+                            PlaybackState.currentVideoId = list.items[PlaybackState.currentIndex];
+                            navigateToVideo(PlaybackState.currentVideoId);
+                        } else {
+                            PlaybackState.currentVideoId = list.items[index];
+                            navigateToVideo(PlaybackState.currentVideoId);
+                        }
+                    }
+                }
+            }
+            updateSidebar();
+            updateNavButtons();
+        }
+
+        // Update callback to also refresh sidebar
+        PlaybackState.onStateChange = () => {
+            console.log('[PiP] State changed, updating UI');
+            updateNavButtons();
+            if (sidebar.classList.contains('open')) {
+                updateSidebar();
+            }
+        };
     }
 
     // Strategy 3: Embedded Proxy
@@ -1437,6 +2214,8 @@ if (window.location.pathname.startsWith('/embed/')) {
             const iframe = existingOverlay.querySelector('iframe');
             if (iframe) {
                 iframe.src = embedSrc;
+                PlaybackState.currentVideoId = videoId;
+                updateEmbedControls(existingOverlay);
                 return; // Done
             } else {
                 // Should not happen, but if iframe missing, remove and recreate
@@ -1459,13 +2238,14 @@ if (window.location.pathname.startsWith('/embed/')) {
             border: '1px solid #333',
             resize: 'both',
             minWidth: '300px',
-            minHeight: '170px',
+            minHeight: '200px',
             // Dynamic Props
             width: size.width + 'px',
             height: size.height + 'px',
             ...pos
         });
 
+        // Header with drag and close
         const header = document.createElement('div');
         Object.assign(header.style, {
             height: '30px', background: '#202020', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', cursor: 'move'
@@ -1479,23 +2259,99 @@ if (window.location.pathname.startsWith('/embed/')) {
         closeBtn.onclick = () => {
             overlay.remove();
             PlaybackState.isPlaying = false;
+            PlaybackState.onStateChange = null;
             console.log('[Embed] Overlay closed');
         };
         header.appendChild(closeBtn);
         overlay.appendChild(header);
 
-        const content = document.createElement('div');
-        content.style.flex = '1';
+        // Main wrapper for content + sidebar
+        const mainWrapper = document.createElement('div');
+        mainWrapper.className = 'embed-main-wrapper';
+        Object.assign(mainWrapper.style, {
+            display: 'flex',
+            flex: '1',
+            overflow: 'hidden'
+        });
 
-        content.innerHTML = `<iframe 
-        src="${embedSrc}" 
+        // Content area with iframe
+        const content = document.createElement('div');
+        content.className = 'embed-player-area';
+        Object.assign(content.style, {
+            flex: '1',
+            position: 'relative',
+            minWidth: '0'
+        });
+
+        content.innerHTML = `<iframe
+        src="${embedSrc}"
         style="width:100%; height:100%; border:none;"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowfullscreen>
     </iframe>`;
 
-        overlay.appendChild(content);
+        mainWrapper.appendChild(content);
+
+        // Sidebar panel
+        const sidebar = document.createElement('div');
+        sidebar.className = 'embed-sidebar';
+        Object.assign(sidebar.style, {
+            width: '0',
+            background: '#1a1a1a',
+            borderLeft: '1px solid #333',
+            overflow: 'hidden',
+            transition: 'width 0.2s ease',
+            display: 'flex',
+            flexDirection: 'column'
+        });
+        sidebar.innerHTML = `
+            <div class="embed-sidebar-header" style="padding:8px 10px;background:#252525;border-bottom:1px solid #333;font-size:11px;font-weight:600;color:#fff;display:flex;justify-content:space-between;align-items:center;">
+                <span class="embed-sidebar-title">Playlist</span>
+                <button class="embed-sidebar-close" style="background:none;border:none;color:#888;cursor:pointer;font-size:14px;padding:0;line-height:1;" title="Close">✕</button>
+            </div>
+            <div class="embed-sidebar-list" style="flex:1;overflow-y:auto;overflow-x:hidden;"></div>
+        `;
+        mainWrapper.appendChild(sidebar);
+
+        overlay.appendChild(mainWrapper);
+
+        // Control bar at bottom
+        const controlBar = document.createElement('div');
+        controlBar.className = 'embed-control-bar';
+        Object.assign(controlBar.style, {
+            height: '36px',
+            background: '#181818',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 10px',
+            borderTop: '1px solid #333'
+        });
+
+        controlBar.innerHTML = `
+            <div class="embed-bar-left" style="display:flex;align-items:center;gap:6px;">
+                <div class="embed-source-indicator" style="position:relative;cursor:pointer;background:rgba(255,255,255,0.1);padding:4px 8px;border-radius:4px;font-size:11px;color:#fff;">
+                    <span class="embed-source-name">${PlaybackState.getActiveSourceName()}</span> ▼
+                    <div class="embed-source-dropdown" style="display:none;position:absolute;bottom:100%;left:0;margin-bottom:4px;background:rgba(28,28,28,0.95);border:1px solid rgba(255,255,255,0.2);border-radius:6px;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.6);max-height:200px;overflow-y:auto;">
+                    </div>
+                </div>
+                <button class="embed-list-toggle" style="background:none;border:none;color:#fff;cursor:pointer;font-size:14px;padding:4px 6px;border-radius:4px;" title="Show playlist">☰</button>
+            </div>
+            <div class="embed-bar-center" style="display:flex;align-items:center;gap:8px;">
+                <button class="embed-prev" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;" title="Previous">⏮</button>
+                <button class="embed-pause" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;" title="Pause">⏸</button>
+                <button class="embed-next" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;" title="Next">⏭</button>
+            </div>
+            <div class="embed-bar-right" style="display:flex;align-items:center;">
+                <span class="embed-counter" style="font-size:11px;color:rgba(255,255,255,0.7);"></span>
+            </div>
+        `;
+
+        overlay.appendChild(controlBar);
         document.body.appendChild(overlay);
+
+        // Setup control bar events
+        setupEmbedControls(overlay);
 
         // Simple Drag Logic
         let isDragging = false;
@@ -1527,6 +2383,333 @@ if (window.location.pathname.startsWith('/embed/')) {
         });
 
         window.addEventListener('mouseup', () => { isDragging = false; });
+
+        // Listen for video ended message from iframe
+        window.addEventListener('message', (e) => {
+            if (e.data && e.data.action === 'videoEnded') {
+                console.log('[Embed AutoPlay] Video ended, checking for next...');
+                const nextVideoId = PlaybackState.next();
+                if (nextVideoId) {
+                    console.log('[Embed AutoPlay] Playing next video:', nextVideoId);
+                    const iframe = overlay.querySelector('iframe');
+                    if (iframe) {
+                        iframe.src = getProxyUrl(nextVideoId);
+                        PlaybackState.currentVideoId = nextVideoId;
+                        updateEmbedControls(overlay);
+                    }
+                } else {
+                    console.log('[Embed AutoPlay] No more videos in queue/list');
+                }
+            }
+        });
+    }
+
+    // Setup embed control bar events
+    function setupEmbedControls(overlay) {
+        const sourceIndicator = overlay.querySelector('.embed-source-indicator');
+        const sourceDropdown = overlay.querySelector('.embed-source-dropdown');
+        const prevBtn = overlay.querySelector('.embed-prev');
+        const nextBtn = overlay.querySelector('.embed-next');
+        const pauseBtn = overlay.querySelector('.embed-pause');
+        const listToggle = overlay.querySelector('.embed-list-toggle');
+        const sidebar = overlay.querySelector('.embed-sidebar');
+        const sidebarList = overlay.querySelector('.embed-sidebar-list');
+        const sidebarTitle = overlay.querySelector('.embed-sidebar-title');
+        const sidebarClose = overlay.querySelector('.embed-sidebar-close');
+
+        let isPaused = false;
+        const embedTitleCache = {};
+
+        // Navigate to video helper
+        function navigateToVideo(videoId) {
+            const iframe = overlay.querySelector('iframe');
+            if (iframe) {
+                iframe.src = getProxyUrl(videoId);
+                PlaybackState.currentVideoId = videoId;
+            }
+        }
+
+        // Show/hide dropdown on hover
+        sourceIndicator.addEventListener('mouseenter', () => {
+            updateSourceDropdown();
+            sourceDropdown.style.display = 'block';
+        });
+        sourceIndicator.addEventListener('mouseleave', () => {
+            sourceDropdown.style.display = 'none';
+        });
+
+        // Update source dropdown content
+        function updateSourceDropdown() {
+            const activeSource = PlaybackState.activeSource;
+            let html = `
+                <div class="embed-source-item" data-source="queue" style="padding:8px 12px;color:#fff;font-size:11px;cursor:pointer;display:flex;align-items:center;gap:8px;${activeSource === 'queue' ? 'background:rgba(255,0,0,0.3);' : ''}">
+                    Queue ${PlaybackState.queue.length > 0 ? `(${PlaybackState.queue.length})` : ''}
+                </div>
+            `;
+            Object.keys(PlaybackState.lists).forEach(id => {
+                const list = PlaybackState.lists[id];
+                const isActive = activeSource === `list:${id}`;
+                const isEmpty = list.items.length === 0;
+                html += `
+                    <div class="embed-source-item ${isEmpty ? 'disabled' : ''}" data-source="list:${id}" style="padding:8px 12px;color:#fff;font-size:11px;cursor:${isEmpty ? 'not-allowed' : 'pointer'};display:flex;align-items:center;gap:8px;${isActive ? 'background:rgba(255,0,0,0.3);' : ''}${isEmpty ? 'opacity:0.4;' : ''}">
+                        ${list.name} ${isEmpty ? '(empty)' : `(${list.items.length})`}
+                    </div>
+                `;
+            });
+            sourceDropdown.innerHTML = html;
+
+            // Add click events
+            sourceDropdown.querySelectorAll('.embed-source-item').forEach(item => {
+                item.addEventListener('mouseenter', () => {
+                    if (!item.classList.contains('disabled')) {
+                        item.style.background = 'rgba(255,255,255,0.1)';
+                    }
+                });
+                item.addEventListener('mouseleave', () => {
+                    const isActive = item.dataset.source === PlaybackState.activeSource ||
+                        (item.dataset.source.startsWith('list:') && PlaybackState.activeSource === item.dataset.source);
+                    item.style.background = isActive ? 'rgba(255,0,0,0.3)' : '';
+                });
+                item.addEventListener('click', () => {
+                    if (item.classList.contains('disabled')) return;
+                    const source = item.dataset.source;
+                    PlaybackState.switchSource(source);
+                    const items = PlaybackState.getActiveItems();
+                    if (items.length > 0) {
+                        navigateToVideo(items[0]);
+                    }
+                    updateEmbedControls(overlay);
+                    updateEmbedSidebar();
+                    sourceDropdown.style.display = 'none';
+                });
+            });
+        }
+
+        // Prev/Next buttons
+        prevBtn.addEventListener('click', () => {
+            const prevVideoId = PlaybackState.previous();
+            if (prevVideoId) {
+                navigateToVideo(prevVideoId);
+                updateEmbedControls(overlay);
+                updateEmbedSidebar();
+            }
+        });
+
+        nextBtn.addEventListener('click', () => {
+            const nextVideoId = PlaybackState.next();
+            if (nextVideoId) {
+                navigateToVideo(nextVideoId);
+                updateEmbedControls(overlay);
+                updateEmbedSidebar();
+            }
+        });
+
+        // Play/Pause button
+        pauseBtn.addEventListener('click', () => {
+            const iframe = overlay.querySelector('iframe');
+            if (iframe && iframe.contentWindow) {
+                isPaused = !isPaused;
+                iframe.contentWindow.postMessage({ action: isPaused ? 'pause' : 'play' }, '*');
+                pauseBtn.textContent = isPaused ? '▶' : '⏸';
+                pauseBtn.title = isPaused ? 'Play' : 'Pause';
+            }
+        });
+
+        // List toggle button
+        listToggle.addEventListener('click', () => {
+            const isOpen = sidebar.style.width !== '0px' && sidebar.style.width !== '';
+            sidebar.style.width = isOpen ? '0' : '180px';
+            if (!isOpen) {
+                updateEmbedSidebar();
+            }
+        });
+
+        // Sidebar close button
+        sidebarClose.addEventListener('click', () => {
+            sidebar.style.width = '0';
+        });
+
+        // Fetch video title helper
+        async function fetchEmbedVideoTitle(videoId) {
+            if (embedTitleCache[videoId]) return embedTitleCache[videoId];
+            const storedTitle = PlaybackState.getVideoTitle(videoId);
+            if (storedTitle) {
+                embedTitleCache[videoId] = storedTitle;
+                return storedTitle;
+            }
+            try {
+                const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+                if (response.ok) {
+                    const data = await response.json();
+                    embedTitleCache[videoId] = data.title;
+                    PlaybackState.saveVideoTitle(videoId, data.title);
+                    return data.title;
+                }
+            } catch (e) { }
+            return videoId;
+        }
+
+        // Update sidebar content
+        function updateEmbedSidebar() {
+            const items = PlaybackState.getActiveItems();
+            sidebarTitle.textContent = PlaybackState.getActiveSourceName();
+
+            if (items.length === 0) {
+                sidebarList.innerHTML = '<div style="padding:20px;text-align:center;color:#666;font-size:11px;">No videos</div>';
+                return;
+            }
+
+            let html = '';
+            items.forEach((videoId, index) => {
+                const isActive = index === PlaybackState.currentIndex;
+                const cachedTitle = embedTitleCache[videoId] || PlaybackState.getVideoTitle(videoId);
+                if (cachedTitle && !embedTitleCache[videoId]) embedTitleCache[videoId] = cachedTitle;
+                html += `
+                    <div class="embed-sidebar-item" data-index="${index}" data-video-id="${videoId}" style="display:flex;align-items:center;padding:6px 8px;gap:8px;cursor:pointer;border-bottom:1px solid #2a2a2a;${isActive ? 'background:rgba(255,0,0,0.2);' : ''}">
+                        <img src="https://i.ytimg.com/vi/${videoId}/mqdefault.jpg" style="width:50px;height:28px;background:#333;border-radius:3px;flex-shrink:0;object-fit:cover;" alt="">
+                        <span class="embed-sidebar-title" data-video-id="${videoId}" style="flex:1;font-size:10px;color:#fff;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3;">${cachedTitle || 'Loading...'}</span>
+                        <button class="embed-sidebar-delete" data-index="${index}" style="background:none;border:none;color:#666;cursor:pointer;font-size:12px;padding:4px;" title="Remove">✕</button>
+                    </div>
+                `;
+            });
+            sidebarList.innerHTML = html;
+
+            // Fetch titles for items not in cache
+            items.forEach(async (videoId) => {
+                if (!embedTitleCache[videoId]) {
+                    const title = await fetchEmbedVideoTitle(videoId);
+                    const titleEl = sidebarList.querySelector(`.embed-sidebar-title[data-video-id="${videoId}"]`);
+                    if (titleEl) titleEl.textContent = title;
+                }
+            });
+
+            // Attach click events
+            sidebarList.querySelectorAll('.embed-sidebar-item').forEach(item => {
+                item.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('embed-sidebar-delete')) return;
+                    const index = parseInt(item.dataset.index);
+                    const videoId = item.dataset.videoId;
+                    PlaybackState.currentIndex = index;
+                    PlaybackState.currentVideoId = videoId;
+                    navigateToVideo(videoId);
+                    updateEmbedControls(overlay);
+                    updateEmbedSidebar();
+                });
+                item.addEventListener('mouseenter', () => {
+                    if (!item.style.background.includes('rgba(255, 0, 0')) {
+                        item.style.background = 'rgba(255,255,255,0.1)';
+                    }
+                });
+                item.addEventListener('mouseleave', () => {
+                    const isActive = parseInt(item.dataset.index) === PlaybackState.currentIndex;
+                    item.style.background = isActive ? 'rgba(255,0,0,0.2)' : '';
+                });
+            });
+
+            // Delete buttons
+            sidebarList.querySelectorAll('.embed-sidebar-delete').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const index = parseInt(btn.dataset.index);
+                    await removeFromEmbedSource(index);
+                });
+                btn.addEventListener('mouseenter', () => btn.style.color = '#ff4444');
+                btn.addEventListener('mouseleave', () => btn.style.color = '#666');
+            });
+
+            // Scroll active into view
+            const activeItem = sidebarList.querySelector('.embed-sidebar-item[style*="rgba(255, 0, 0"]');
+            if (activeItem) activeItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+
+        // Remove item from source
+        async function removeFromEmbedSource(index) {
+            const source = PlaybackState.activeSource;
+            if (source === 'queue') {
+                PlaybackState.queue.splice(index, 1);
+                if (index < PlaybackState.currentIndex) {
+                    PlaybackState.currentIndex--;
+                } else if (index === PlaybackState.currentIndex) {
+                    if (PlaybackState.queue.length === 0) {
+                        PlaybackState.currentIndex = -1;
+                        PlaybackState.currentVideoId = null;
+                    } else if (index >= PlaybackState.queue.length) {
+                        PlaybackState.currentIndex = PlaybackState.queue.length - 1;
+                        PlaybackState.currentVideoId = PlaybackState.queue[PlaybackState.currentIndex];
+                        navigateToVideo(PlaybackState.currentVideoId);
+                    } else {
+                        PlaybackState.currentVideoId = PlaybackState.queue[index];
+                        navigateToVideo(PlaybackState.currentVideoId);
+                    }
+                }
+            } else if (source && source.startsWith('list:')) {
+                const listId = source.replace('list:', '');
+                const list = PlaybackState.lists[listId];
+                if (list) {
+                    list.items.splice(index, 1);
+                    await PlaybackState.saveLists();
+                    if (index < PlaybackState.currentIndex) {
+                        PlaybackState.currentIndex--;
+                    } else if (index === PlaybackState.currentIndex) {
+                        if (list.items.length === 0) {
+                            PlaybackState.currentIndex = -1;
+                            PlaybackState.currentVideoId = null;
+                        } else if (index >= list.items.length) {
+                            PlaybackState.currentIndex = list.items.length - 1;
+                            PlaybackState.currentVideoId = list.items[PlaybackState.currentIndex];
+                            navigateToVideo(PlaybackState.currentVideoId);
+                        } else {
+                            PlaybackState.currentVideoId = list.items[index];
+                            navigateToVideo(PlaybackState.currentVideoId);
+                        }
+                    }
+                }
+            }
+            updateEmbedSidebar();
+            updateEmbedControls(overlay);
+        }
+
+        // Register state change callback
+        PlaybackState.onStateChange = () => {
+            updateEmbedControls(overlay);
+            if (sidebar.style.width !== '0px' && sidebar.style.width !== '') {
+                updateEmbedSidebar();
+            }
+        };
+
+        // Initial update
+        updateEmbedControls(overlay);
+    }
+
+    // Update embed controls UI
+    function updateEmbedControls(overlay) {
+        if (!overlay) return;
+        const sourceName = overlay.querySelector('.embed-source-name');
+        const counter = overlay.querySelector('.embed-counter');
+        const prevBtn = overlay.querySelector('.embed-prev');
+        const nextBtn = overlay.querySelector('.embed-next');
+
+        if (sourceName) {
+            sourceName.textContent = PlaybackState.getActiveSourceName();
+        }
+
+        if (counter) {
+            counter.textContent = PlaybackState.getPositionInfo() || '';
+        }
+
+        const items = PlaybackState.getActiveItems();
+        const hasQueue = items.length > 0;
+        const canPrev = hasQueue && PlaybackState.currentIndex > 0;
+        const canNext = hasQueue && PlaybackState.currentIndex < items.length - 1;
+
+        if (prevBtn) {
+            prevBtn.disabled = !canPrev;
+            prevBtn.style.opacity = canPrev ? '1' : '0.3';
+        }
+        if (nextBtn) {
+            nextBtn.disabled = !canNext;
+            nextBtn.style.opacity = canNext ? '1' : '0.3';
+        }
     }
 
     // --- Layout Helpers ---
@@ -1556,5 +2739,336 @@ if (window.location.pathname.startsWith('/embed/')) {
             case 'bottom-right':
             default: return { bottom: margin + 'px', right: margin + 'px', top: 'auto', left: 'auto', transform: 'none' };
         }
+    }
+
+    // --- Playlist Panel Import Buttons ---
+    // Injects import buttons into YouTube's playlist panel on watch pages
+    function injectPlaylistPanelButtons() {
+        // Only run on watch pages
+        if (!window.location.pathname.startsWith('/watch')) return;
+
+        // Find the playlist panel
+        const playlistPanel = document.querySelector('ytd-playlist-panel-renderer');
+        if (!playlistPanel) return;
+
+        // Check if we already injected buttons
+        if (playlistPanel.querySelector('.yt-preview-import-btns')) return;
+
+        // Find the header area to inject buttons
+        const header = playlistPanel.querySelector('#header-contents, #header');
+        if (!header) return;
+
+        // Get playlist info
+        const playlistTitleEl = playlistPanel.querySelector('#playlist-title, .title');
+        const playlistName = playlistTitleEl?.textContent?.trim() || 'YouTube Playlist';
+
+        // Count videos
+        const videoItems = playlistPanel.querySelectorAll('ytd-playlist-panel-video-renderer');
+        const videoCount = videoItems.length;
+
+        if (videoCount === 0) return;
+
+        // Create import buttons container
+        const btnContainer = document.createElement('div');
+        btnContainer.className = 'yt-preview-import-btns';
+        btnContainer.style.cssText = `
+            position: relative;
+            display: flex;
+            gap: 6px;
+            padding: 8px 16px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.2);
+        `;
+
+        // Build lists HTML for dropdown
+        function buildImportListsHTML() {
+            let listsHTML = '';
+            const lists = PlaybackState.lists || {};
+            const listIds = Object.keys(lists);
+            if (listIds.length > 0) {
+                listsHTML = `<div class="yt-preview-dropdown-divider"></div>
+                    <div class="yt-preview-dropdown-header">Add to list</div>`;
+                for (const id of listIds) {
+                    listsHTML += `<button class="yt-preview-dropdown-item" data-action="add-to-list" data-list-id="${id}">
+                        + ${lists[id].name}
+                    </button>`;
+                }
+            }
+            return listsHTML;
+        }
+
+        btnContainer.innerHTML = `
+            <button class="yt-preview-import-btn primary" id="yt-import-preview-btn" style="
+                flex: 1;
+                background: rgba(255, 0, 0, 0.3);
+                border: 1px solid rgba(255, 0, 0, 0.4);
+                border-radius: 18px;
+                padding: 6px 12px;
+                color: #fff;
+                font-size: 11px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 4px;
+                transition: background 0.2s;
+            ">
+                ▶ Preview
+            </button>
+            <div class="yt-preview-import-dropdown" style="
+                display: none;
+                position: absolute;
+                top: 100%;
+                left: 16px;
+                right: 16px;
+                background: #212121;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 8px;
+                padding: 8px 0;
+                z-index: 9999;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+                max-height: 300px;
+                overflow-y: auto;
+            ">
+                <button class="yt-preview-dropdown-item" data-action="add-queue" style="
+                    display: block;
+                    width: 100%;
+                    padding: 8px 16px;
+                    background: none;
+                    border: none;
+                    color: #fff;
+                    font-size: 13px;
+                    text-align: left;
+                    cursor: pointer;
+                ">
+                    + Add to queue
+                </button>
+                <button class="yt-preview-dropdown-item" data-action="create-new" style="
+                    display: block;
+                    width: 100%;
+                    padding: 8px 16px;
+                    background: none;
+                    border: none;
+                    color: #fff;
+                    font-size: 13px;
+                    text-align: left;
+                    cursor: pointer;
+                ">
+                    + Create list
+                </button>
+                ${buildImportListsHTML()}
+            </div>
+        `;
+
+        const previewBtn = btnContainer.querySelector('#yt-import-preview-btn');
+        const dropdown = btnContainer.querySelector('.yt-preview-import-dropdown');
+
+        // Toggle dropdown on button click
+        previewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const isVisible = dropdown.style.display === 'block';
+            dropdown.style.display = isVisible ? 'none' : 'block';
+            // Refresh lists when opening
+            if (!isVisible) {
+                const listsContainer = dropdown.querySelector('.yt-preview-dropdown-header')?.parentElement;
+                if (listsContainer) {
+                    // Remove old list items
+                    dropdown.querySelectorAll('[data-action="add-to-list"]').forEach(el => el.remove());
+                    const dividers = dropdown.querySelectorAll('.yt-preview-dropdown-divider');
+                    if (dividers.length > 0) dividers[dividers.length - 1]?.remove();
+                    const headers = dropdown.querySelectorAll('.yt-preview-dropdown-header');
+                    if (headers.length > 0) headers[headers.length - 1]?.remove();
+                }
+                // Add fresh lists
+                dropdown.insertAdjacentHTML('beforeend', buildImportListsHTML());
+            }
+        });
+
+        // Hover effects for button
+        previewBtn.addEventListener('mouseenter', (e) => {
+            e.stopPropagation();
+            previewBtn.style.background = 'rgba(255, 0, 0, 0.5)';
+        });
+        previewBtn.addEventListener('mouseleave', (e) => {
+            e.stopPropagation();
+            previewBtn.style.background = 'rgba(255, 0, 0, 0.3)';
+        });
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!btnContainer.contains(e.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
+
+        // Stop propagation on container level
+        btnContainer.addEventListener('mousedown', (e) => {
+            e.stopPropagation();
+        });
+
+        // Handle dropdown item clicks
+        dropdown.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+
+            const item = e.target.closest('.yt-preview-dropdown-item');
+            if (!item) return;
+
+            const action = item.dataset.action;
+            dropdown.style.display = 'none';
+
+            // Get all videos from the playlist panel
+            const videos = getPlaylistPanelVideos(playlistPanel);
+            if (videos.length === 0) {
+                showNotification('No videos found in playlist');
+                return;
+            }
+
+            // Save all video titles
+            for (const v of videos) {
+                if (v.title) {
+                    PlaybackState.saveVideoTitle(v.videoId, v.title);
+                }
+            }
+
+            switch (action) {
+                case 'add-queue':
+                    for (const v of videos) {
+                        PlaybackState.queueAppend(v.videoId);
+                    }
+                    showNotification(`Added ${videos.length} videos to queue`);
+                    break;
+
+                case 'create-new':
+                    const newListId = await PlaybackState.createList(playlistName);
+                    for (const v of videos) {
+                        await PlaybackState.listAppend(newListId, v.videoId);
+                    }
+                    PlaybackState.switchSource(`list:${newListId}`);
+                    showNotification(`Created "${playlistName}" with ${videos.length} videos`);
+                    refreshAllDropdowns();
+                    break;
+
+                case 'add-to-list':
+                    const listId = item.dataset.listId;
+                    if (listId && PlaybackState.lists[listId]) {
+                        for (const v of videos) {
+                            await PlaybackState.listAppend(listId, v.videoId);
+                        }
+                        showNotification(`Added ${videos.length} videos to ${PlaybackState.lists[listId].name}`);
+                    }
+                    break;
+            }
+
+            PlaybackState.notifyChange();
+        });
+
+        // Add hover effect to dropdown items
+        dropdown.addEventListener('mouseover', (e) => {
+            const item = e.target.closest('.yt-preview-dropdown-item');
+            if (item) {
+                item.style.background = 'rgba(255, 255, 255, 0.1)';
+            }
+        });
+        dropdown.addEventListener('mouseout', (e) => {
+            const item = e.target.closest('.yt-preview-dropdown-item');
+            if (item) {
+                item.style.background = 'none';
+            }
+        });
+
+        // Insert after header
+        header.insertAdjacentElement('afterend', btnContainer);
+        console.log('[Playlist Panel] Injected import buttons for:', playlistName, '(' + videoCount + ' videos)');
+    }
+
+    // Get all videos from the playlist panel
+    function getPlaylistPanelVideos(panel) {
+        const items = panel.querySelectorAll('ytd-playlist-panel-video-renderer');
+        const videos = [];
+
+        items.forEach(item => {
+            const titleEl = item.querySelector('#video-title, a#video-title');
+            const href = titleEl?.getAttribute('href') || item.querySelector('a')?.getAttribute('href');
+
+            if (href) {
+                const videoId = extractVideoId(href);
+                const title = titleEl?.getAttribute('title') || titleEl?.textContent?.trim();
+
+                if (videoId && !videos.some(v => v.videoId === videoId)) {
+                    videos.push({ videoId, title });
+                }
+            }
+        });
+
+        return videos;
+    }
+
+    // Helper function to open preview using configured strategy
+    function openPreviewWithStrategy(videoId) {
+        console.log('[Preview] Opening video:', videoId, 'Strategy:', currentStrategy);
+        if (currentStrategy === 'zen') {
+            openZenPopup(videoId);
+        } else if (currentStrategy === 'pip') {
+            openPiPWindow(videoId);
+        } else {
+            openEmbeddedProxy(videoId);
+        }
+    }
+
+    // Listen for messages from popup to open preview
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.action === 'openPreview') {
+            const { videoId, source, index } = message;
+
+            // Set the playback state
+            if (source === 'queue') {
+                PlaybackState.activeSource = 'queue';
+                PlaybackState.currentIndex = index;
+            } else if (source && source.startsWith('list:')) {
+                PlaybackState.activeSource = source;
+                PlaybackState.currentIndex = index;
+            }
+
+            PlaybackState.currentVideoId = videoId;
+            PlaybackState.isPlaying = true;
+
+            // Open using configured strategy
+            openPreviewWithStrategy(videoId);
+
+            sendResponse({ success: true });
+        }
+        return true;
+    });
+
+    // Check for auto-open from popup button
+    const autoOpenParams = new URLSearchParams(window.location.search);
+    const autoOpenVideoId = autoOpenParams.get('ytPreviewAutoOpen');
+    if (autoOpenVideoId) {
+        const source = decodeURIComponent(autoOpenParams.get('source') || 'queue');
+        const index = parseInt(autoOpenParams.get('index') || '0', 10);
+
+        // Wait for page to be ready, then open preview
+        setTimeout(() => {
+            // Set the playback state
+            if (source === 'queue') {
+                PlaybackState.activeSource = 'queue';
+                PlaybackState.currentIndex = index;
+            } else if (source && source.startsWith('list:')) {
+                PlaybackState.activeSource = source;
+                PlaybackState.currentIndex = index;
+            }
+
+            PlaybackState.currentVideoId = autoOpenVideoId;
+            PlaybackState.isPlaying = true;
+
+            // Open using configured strategy
+            openPreviewWithStrategy(autoOpenVideoId);
+
+            // Clean URL without reloading
+            const cleanUrl = window.location.origin + window.location.pathname;
+            window.history.replaceState({}, '', cleanUrl);
+        }, 1500);
     }
 }
