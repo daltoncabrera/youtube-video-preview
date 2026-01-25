@@ -1276,6 +1276,8 @@ if (window.location.pathname.startsWith('/embed/')) {
     }
 
     // --- Helper: Close YouTube's native mini player ---
+    let miniPlayerObserver = null;
+
     function closeYouTubeMiniPlayer() {
         try {
             // Find YouTube's mini player element
@@ -1301,6 +1303,39 @@ if (window.location.pathname.startsWith('/embed/')) {
             }
         } catch (err) {
             console.warn('[YouTube Preview] Error closing mini player:', err);
+        }
+    }
+
+    // Interval-based watcher for YouTube mini player
+    let miniPlayerWatcherInterval = null;
+
+    function startMiniPlayerWatcher() {
+        if (miniPlayerWatcherInterval) return; // Already watching
+
+        console.log('[YouTube Preview] Starting mini player watcher');
+
+        miniPlayerWatcherInterval = setInterval(() => {
+            // Check if mini player is active
+            const miniPlayer = document.querySelector('ytd-miniplayer');
+            if (miniPlayer && miniPlayer.hasAttribute('active')) {
+                console.log('[YouTube Preview] Detected active mini player, closing it');
+                closeYouTubeMiniPlayer();
+            }
+
+            // Also check for video playing in mini player
+            const miniPlayerVideo = document.querySelector('ytd-miniplayer video');
+            if (miniPlayerVideo && !miniPlayerVideo.paused) {
+                miniPlayerVideo.pause();
+                console.log('[YouTube Preview] Paused mini player video');
+            }
+        }, 500); // Check every 500ms
+    }
+
+    function stopMiniPlayerWatcher() {
+        if (miniPlayerWatcherInterval) {
+            clearInterval(miniPlayerWatcherInterval);
+            miniPlayerWatcherInterval = null;
+            console.log('[YouTube Preview] Stopped mini player watcher');
         }
     }
 
@@ -1388,8 +1423,9 @@ if (window.location.pathname.startsWith('/embed/')) {
                 window.documentPictureInPicture.window.close();
             }
 
-            // Close YouTube's native mini player if active
+            // Close YouTube's native mini player if active and start watching
             closeYouTubeMiniPlayer();
+            startMiniPlayerWatcher();
 
             // Get size settings
             const size = getInitialSize(defSize);
@@ -1796,6 +1832,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 PlaybackState.pipWindow = null;
                 PlaybackState.isPlaying = false;
                 PlaybackState.onStateChange = null; // Clear callback
+                stopMiniPlayerWatcher(); // Stop watching for mini player
             });
 
         } catch (error) {
@@ -2366,8 +2403,9 @@ if (window.location.pathname.startsWith('/embed/')) {
 
     // Strategy 3: Embedded Proxy
     function openEmbeddedProxy(videoId) {
-        // Close YouTube's native mini player if active
+        // Close YouTube's native mini player if active and start watching
         closeYouTubeMiniPlayer();
+        startMiniPlayerWatcher();
 
         const embedSrc = getProxyUrl(videoId);
 
@@ -2425,6 +2463,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             overlay.remove();
             PlaybackState.isPlaying = false;
             PlaybackState.onStateChange = null;
+            stopMiniPlayerWatcher(); // Stop watching for mini player
             console.log('[Embed] Overlay closed');
         };
         header.appendChild(closeBtn);
