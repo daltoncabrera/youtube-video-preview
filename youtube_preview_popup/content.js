@@ -1275,6 +1275,35 @@ if (window.location.pathname.startsWith('/embed/')) {
         });
     }
 
+    // --- Helper: Close YouTube's native mini player ---
+    function closeYouTubeMiniPlayer() {
+        try {
+            // Find YouTube's mini player element
+            const miniPlayer = document.querySelector('ytd-miniplayer[active]');
+            if (miniPlayer) {
+                // Try clicking the close button
+                const closeBtn = miniPlayer.querySelector('.ytp-miniplayer-close-button, button[aria-label="Close"]');
+                if (closeBtn) {
+                    closeBtn.click();
+                    console.log('[YouTube Preview] Closed YouTube mini player via button');
+                } else {
+                    // Fallback: remove active attribute
+                    miniPlayer.removeAttribute('active');
+                    console.log('[YouTube Preview] Closed YouTube mini player via attribute');
+                }
+            }
+
+            // Also try to pause any playing video in the main player
+            const mainVideo = document.querySelector('video.html5-main-video');
+            if (mainVideo && !mainVideo.paused) {
+                mainVideo.pause();
+                console.log('[YouTube Preview] Paused main YouTube video');
+            }
+        } catch (err) {
+            console.warn('[YouTube Preview] Error closing mini player:', err);
+        }
+    }
+
     // --- Helper: Construct Proxy URL ---
     function getProxyUrl(videoId) {
         let embedSrc = iframeProxyUrl;
@@ -1358,6 +1387,9 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (window.documentPictureInPicture.window) {
                 window.documentPictureInPicture.window.close();
             }
+
+            // Close YouTube's native mini player if active
+            closeYouTubeMiniPlayer();
 
             // Get size settings
             const size = getInitialSize(defSize);
@@ -2334,6 +2366,9 @@ if (window.location.pathname.startsWith('/embed/')) {
 
     // Strategy 3: Embedded Proxy
     function openEmbeddedProxy(videoId) {
+        // Close YouTube's native mini player if active
+        closeYouTubeMiniPlayer();
+
         const embedSrc = getProxyUrl(videoId);
 
         // Check for existing overlay
