@@ -1736,6 +1736,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                                         <button class="pip-bar-btn pip-toggle-btn ${shuffleMode ? 'active' : ''}" id="pip-shuffle" title="Shuffle">🔀</button>
                                         <button class="pip-bar-btn pip-toggle-btn ${repeatMode ? 'active' : ''}" id="pip-repeat" title="Repeat">🔁</button>
                                         <span class="pip-queue-counter" id="pip-counter">${PlaybackState.getPositionInfo() || ''}</span>
+                                        <button class="pip-bar-btn" id="pip-focus-tab" title="Focus YouTube tab">🔙</button>
                                     </div>
                                 </div>
                             </div>
@@ -1915,6 +1916,14 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Save to storage
             chrome.storage.local.set({ repeatMode });
             updateNavButtons();
+        });
+
+        // Focus YouTube tab handler (keeps PiP open)
+        const focusTabBtn = doc.getElementById('pip-focus-tab');
+        focusTabBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // Focus the parent YouTube window/tab
+            window.focus();
         });
 
         // Source selection handler using event delegation
