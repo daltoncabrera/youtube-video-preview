@@ -91,18 +91,18 @@ if (window.location.pathname.startsWith('/embed/')) {
         const style = document.createElement('style');
         style.textContent = `
         /* Hide everything except the player */
-        ytd-masthead, #secondary, #below, #comments, #chat, #merch-shelf, ytd-watch-metadata, #related, #header, #masthead-container { display: none !important; }
+        ytd-masthead, #secondary, #below, #comments, #chat, #merch-shelf, ytd-watch-metadata, #related, #header, #masthead-container, tp-yt-app-drawer, ytd-mini-guide-renderer { display: none !important; }
         
         /* Reset layout constraints to fill window */
         #page-manager { margin: 0 !important; margin-top: 0 !important; overflow: hidden !important; }
         #columns { max-width: 100% !important; margin: 0 !important; }
         #primary { max-width: 100% !important; padding: 0 !important; margin: 0 !important; }
-        #player { max-width: 100% !important; margin: 0 !important; min-height: 100vh !important; }
+        #player, #player-container-outer, #player-container-inner { max-width: none !important; margin: 0 !important; width: 100vw !important; height: 100vh !important; }
         ytd-watch-flexy { max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
         
         /* Force player to fill viewport */
         html, body { overflow: hidden !important; background: #000 !important; }
-        .html5-video-player { width: 100vw !important; height: 100vh !important; z-index: 99999 !important; }
+        #movie_player, .html5-video-player { position: fixed !important; inset: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 99999 !important; }
         video { object-fit: contain !important; }
         ::-webkit-scrollbar { display: none; }
     `;
@@ -1870,24 +1870,19 @@ if (window.location.pathname.startsWith('/embed/')) {
         }
     }
 
-    // Strategy 1: Zen Popup (Optimized: Uses Proxy)
+    // Strategy 1: Zen Popup (uses YouTube's native watch player)
     function openZenPopup(videoId) {
-        // NEW: Use the lightweight proxy
-        let proxyUrl = getProxyUrl(videoId);
-
-        // Ensure autoplay is passed to the proxy
-        if (proxyUrl.includes('?')) {
-            proxyUrl += '&autoplay=1';
-        } else {
-            proxyUrl += '?autoplay=1';
-        }
+        const playerUrl = new URL('https://www.youtube.com/watch');
+        playerUrl.searchParams.set('v', videoId);
+        playerUrl.searchParams.set('preview_popup', '1');
+        playerUrl.searchParams.set('autoplay', '1');
 
         const width = 854;
         const height = 480;
         const left = (window.screen.width / 2) - (width / 2);
         const top = (window.screen.height / 2) - (height / 2);
 
-        window.open(proxyUrl, "YouTubePreview", `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes,status=no,toolbar=no,menubar=no,location=yes`);
+        window.open(playerUrl.href, "YouTubePreview", `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=no,status=no,toolbar=no,menubar=no,location=no`);
     }
 
     // Strategy 2: Picture-in-Picture (Always on Top)
