@@ -775,6 +775,11 @@ if (window.location.pathname.startsWith('/embed/')) {
 
         // Event handlers
         setupDropdownEvents(wrapper, dropdown);
+        mainBtn.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dropdown.querySelector('[data-action="preview-now"]')?.click();
+        });
 
         buttonHost.appendChild(wrapper);
         previewWrappersByHost.set(buttonHost, wrapper);
@@ -883,6 +888,10 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
                 lastPointer = { x: event.clientX, y: event.clientY, target: event.target };
             }
+            if (isFloating && wrapper.parentElement === document.body) {
+                keepPreviewAlive();
+                return;
+            }
             anchorRect = host.getBoundingClientRect();
             isFloating = true;
             wrapper.classList.add('floating');
@@ -903,11 +912,9 @@ if (window.location.pathname.startsWith('/embed/')) {
         // treating extension menu actions as clicks on the video link.
         wrapper.addEventListener('pointerdown', (event) => {
             floatAboveYouTube(event);
-            event.preventDefault();
             event.stopPropagation();
         });
         wrapper.addEventListener('mousedown', (event) => {
-            event.preventDefault();
             event.stopPropagation();
         });
         wrapper.addEventListener('click', (event) => {

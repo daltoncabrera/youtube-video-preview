@@ -157,6 +157,36 @@
         const landingContainer = document.getElementById('landing-page');
 
         var player;
+        var playerReady = false;
+        var pendingPlayerCommand = null;
+
+        function isAllowedYouTubeOrigin(origin) {
+            return /^https:\/\/([a-z0-9-]+\.)?youtube\.com$/i.test(origin);
+        }
+
+        function executePlayerCommand(command) {
+            if (!playerReady || !player || !command) {
+                pendingPlayerCommand = command;
+                return;
+            }
+
+            if (command.action === 'pause') {
+                player.pauseVideo();
+            } else if (command.action === 'play') {
+                player.playVideo();
+            } else if (command.action === 'loadVideo'
+                && /^[A-Za-z0-9_-]{11}$/.test(command.videoId || '')) {
+                player.loadVideoById(command.videoId);
+            }
+        }
+
+        // Register immediately. PiP commands can arrive while the YouTube API
+        // is still loading, especially when navigating quickly through a list.
+        window.addEventListener('message', function (event) {
+            if (!isAllowedYouTubeOrigin(event.origin) || !event.data) return;
+            if (!['play', 'pause', 'loadVideo'].includes(event.data.action)) return;
+            executePlayerCommand(event.data);
+        });
 
         if (videoId) {
             // --- PLAYER MODE ---
@@ -198,21 +228,12 @@
                 // Most browsers block unmuted autoplay, but simulated clicks works sometimes if recent interaction
                 // Or we can try to mute first if unmuted fails
                 event.target.playVideo();
-
-                // Listen for postMessage commands from parent window (PiP controls)
-                window.addEventListener('message', function(e) {
-                    if (e.source !== window.parent || !/^https:\/\/([a-z0-9-]+\.)?youtube\.com$/i.test(e.origin)) {
-                        return;
-                    }
-                    if (e.data && e.data.action === 'pause') {
-                        player.pauseVideo();
-                    } else if (e.data && e.data.action === 'play') {
-                        player.playVideo();
-                    } else if (e.data && e.data.action === 'loadVideo'
-                        && /^[A-Za-z0-9_-]{11}$/.test(e.data.videoId || '')) {
-                        player.loadVideoById(e.data.videoId);
-                    }
-                });
+                playerReady = true;
+                if (pendingPlayerCommand) {
+                    const command = pendingPlayerCommand;
+                    pendingPlayerCommand = null;
+                    executePlayerCommand(command);
+                }
             }
 
             function onPlayerStateChange(event) {
