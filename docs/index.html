@@ -208,6 +208,9 @@
                         player.pauseVideo();
                     } else if (e.data && e.data.action === 'play') {
                         player.playVideo();
+                    } else if (e.data && e.data.action === 'loadVideo'
+                        && /^[A-Za-z0-9_-]{11}$/.test(e.data.videoId || '')) {
+                        player.loadVideoById(e.data.videoId);
                     }
                 });
             }

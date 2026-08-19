@@ -1624,6 +1624,15 @@ if (window.location.pathname.startsWith('/embed/')) {
         }
     }
 
+    function loadVideoWithoutReplacingFrame(iframe, videoId) {
+        if (!iframe?.contentWindow || !videoId) return false;
+        iframe.contentWindow.postMessage(
+            { action: 'loadVideo', videoId },
+            getProxyOrigin(videoId)
+        );
+        return true;
+    }
+
     function controlIcon(name) {
         const paths = {
             previous: '<path d="M7 5v14M18 6l-8 6 8 6V6z"/>',
@@ -2215,9 +2224,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             console.log('[Nav] Navigating to:', videoId);
             if (videoId) {
                 PlaybackState.currentVideoId = videoId;
-                const newSrc = getProxyUrl(videoId);
-                console.log('[Nav] New iframe src:', newSrc);
-                iframe.src = newSrc;
+                loadVideoWithoutReplacingFrame(iframe, videoId);
                 updateNavButtons();
                 updateSidebar();
             } else {
@@ -2720,7 +2727,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Reuse existing overlay: Just update the Iframe
             const iframe = existingOverlay.querySelector('iframe');
             if (iframe) {
-                iframe.src = embedSrc;
+                loadVideoWithoutReplacingFrame(iframe, videoId);
                 PlaybackState.currentVideoId = videoId;
                 updateEmbedControls(existingOverlay);
                 return; // Done
@@ -2909,7 +2916,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     console.log('[Embed AutoPlay] Playing next video:', nextVideoId);
                     const iframe = overlay.querySelector('iframe');
                     if (iframe) {
-                        iframe.src = getProxyUrl(nextVideoId);
+                        loadVideoWithoutReplacingFrame(iframe, nextVideoId);
                         PlaybackState.currentVideoId = nextVideoId;
                         updateEmbedControls(overlay);
                     }
@@ -2946,7 +2953,7 @@ if (window.location.pathname.startsWith('/embed/')) {
         function navigateToVideo(videoId) {
             const iframe = overlay.querySelector('iframe');
             if (iframe) {
-                iframe.src = getProxyUrl(videoId);
+                loadVideoWithoutReplacingFrame(iframe, videoId);
                 PlaybackState.currentVideoId = videoId;
             }
         }
