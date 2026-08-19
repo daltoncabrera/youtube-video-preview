@@ -137,6 +137,118 @@ if (window.location.pathname.startsWith('/embed/')) {
             .replaceAll("'", '&#039;');
     }
 
+    function showHtmlDialog(targetDocument, options = {}) {
+        return new Promise((resolve) => {
+            const doc = targetDocument || document;
+            const backdrop = doc.createElement('div');
+            backdrop.style.cssText = `
+                position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;
+                padding:18px;background:rgba(0,0,0,.68);backdrop-filter:blur(4px);
+            `;
+
+            const dialog = doc.createElement('div');
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.style.cssText = `
+                width:min(320px,100%);padding:18px;background:#1b1b1f;color:#f4f4f5;
+                border:1px solid rgba(255,255,255,.11);border-radius:14px;
+                box-shadow:0 18px 50px rgba(0,0,0,.55);font-family:Arial,sans-serif;
+            `;
+
+            const title = doc.createElement('div');
+            title.textContent = options.title || 'Confirm action';
+            title.style.cssText = 'font-size:14px;font-weight:700;margin-bottom:7px;';
+
+            const message = doc.createElement('div');
+            message.textContent = options.message || '';
+            message.style.cssText = 'font-size:12px;line-height:1.45;color:#aaaab0;margin-bottom:16px;';
+
+            let input = null;
+            if (options.input) {
+                input = doc.createElement('input');
+                input.type = 'text';
+                input.value = options.defaultValue || '';
+                input.placeholder = options.placeholder || '';
+                input.style.cssText = `
+                    width:100%;height:36px;margin:-4px 0 16px;padding:0 10px;color:#fff;
+                    background:#101012;border:1px solid rgba(255,255,255,.14);
+                    border-radius:8px;outline:none;box-sizing:border-box;
+                `;
+            }
+
+            const actions = doc.createElement('div');
+            actions.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;';
+            const cancelButton = doc.createElement('button');
+            cancelButton.textContent = options.cancelLabel || 'Cancel';
+            const confirmButton = doc.createElement('button');
+            confirmButton.textContent = options.confirmLabel || 'Confirm';
+
+            [cancelButton, confirmButton].forEach(button => {
+                button.style.cssText = `
+                    min-width:76px;height:34px;padding:0 12px;border-radius:8px;
+                    border:1px solid rgba(255,255,255,.1);cursor:pointer;font-weight:600;
+                `;
+            });
+            cancelButton.style.background = 'rgba(255,255,255,.06)';
+            cancelButton.style.color = '#ddd';
+            confirmButton.style.background = options.danger ? '#b3262d' : '#e8e8eb';
+            confirmButton.style.color = options.danger ? '#fff' : '#111';
+
+            const finish = (confirmed) => {
+                doc.removeEventListener('keydown', handleKeydown, true);
+                backdrop.remove();
+                resolve(options.input ? (confirmed ? input.value.trim() : null) : confirmed);
+            };
+            const handleKeydown = (event) => {
+                if (event.key === 'Escape') finish(false);
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    finish(true);
+                }
+            };
+
+            cancelButton.addEventListener('click', () => finish(false));
+            confirmButton.addEventListener('click', () => finish(true));
+            backdrop.addEventListener('click', (event) => {
+                if (event.target === backdrop) finish(false);
+            });
+            doc.addEventListener('keydown', handleKeydown, true);
+
+            dialog.append(title, message);
+            if (input) dialog.appendChild(input);
+            actions.append(cancelButton, confirmButton);
+            dialog.appendChild(actions);
+            backdrop.appendChild(dialog);
+            (doc.body || doc.documentElement).appendChild(backdrop);
+            (input || confirmButton).focus();
+            if (input) input.select();
+        });
+    }
+
+    function showHtmlConfirm(doc, options) {
+        return showHtmlDialog(doc, options);
+    }
+
+    function showHtmlPrompt(doc, options) {
+        return showHtmlDialog(doc, { ...options, input: true });
+    }
+
+    function setupDelayedMenuClose(container, menu, delay = 280) {
+        let closeTimer = null;
+        const cancelClose = () => {
+            clearTimeout(closeTimer);
+            closeTimer = null;
+        };
+        const scheduleClose = () => {
+            cancelClose();
+            closeTimer = setTimeout(() => menu.classList.remove('open'), delay);
+        };
+        container.addEventListener('mouseenter', cancelClose);
+        container.addEventListener('mouseleave', scheduleClose);
+        menu.addEventListener('mouseenter', cancelClose);
+        menu.addEventListener('mouseleave', scheduleClose);
+    }
+
     // ====== PLAYBACK STATE MANAGEMENT ======
     const PlaybackState = {
         // Current playback source: null | 'queue' | 'list:listId'
@@ -274,6 +386,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (this.activeSource === `list:${listId}`) {
                 this.activeSource = 'queue';
                 this.currentIndex = this.queue.length > 0 ? 0 : -1;
+                this.currentVideoId = this.queue[this.currentIndex] || null;
             }
             delete this.lists[listId];
             await this.saveLists();
@@ -513,11 +626,53 @@ if (window.location.pathname.startsWith('/embed/')) {
             this.activeSource = source;
             const items = this.getActiveItems();
             this.currentIndex = items.length > 0 ? 0 : -1;
-            if (items.length > 0) {
-                this.currentVideoId = items[0];
-            }
+            this.currentVideoId = items[0] || null;
             console.log('[Source] Switched to:', source, 'Items:', items.length);
             this.commitPlayback();
+        },
+
+        async reorderActiveItem(fromIndex, toIndex) {
+            const items = this.getActiveItems();
+            if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0
+                || fromIndex >= items.length || toIndex >= items.length) return false;
+
+            const currentId = this.currentVideoId;
+            const [movedItem] = items.splice(fromIndex, 1);
+            items.splice(toIndex, 0, movedItem);
+            this.currentIndex = currentId ? items.indexOf(currentId) : -1;
+
+            if (this.activeSource?.startsWith('list:')) await this.saveLists();
+            this.commitPlayback();
+            return true;
+        },
+
+        async sortActiveItems(mode) {
+            const items = this.getActiveItems();
+            if (items.length < 2 || !['title-asc', 'title-desc'].includes(mode)) return false;
+
+            const currentId = this.currentVideoId;
+            const direction = mode === 'title-desc' ? -1 : 1;
+            items.sort((a, b) => {
+                const titleA = this.getVideoTitle(a) || a;
+                const titleB = this.getVideoTitle(b) || b;
+                return titleA.localeCompare(titleB, undefined, { sensitivity: 'base' }) * direction;
+            });
+            this.currentIndex = currentId ? items.indexOf(currentId) : -1;
+
+            if (this.activeSource?.startsWith('list:')) await this.saveLists();
+            this.commitPlayback();
+            return true;
+        },
+
+        async clearActiveItems() {
+            const items = this.getActiveItems();
+            if (!items.length) return false;
+            items.splice(0, items.length);
+            this.currentIndex = -1;
+            this.currentVideoId = null;
+            if (this.activeSource?.startsWith('list:')) await this.saveLists();
+            this.commitPlayback();
+            return true;
         },
 
         // Get position info
@@ -1199,7 +1354,12 @@ if (window.location.pathname.startsWith('/embed/')) {
                     break;
 
                 case 'new-list':
-                    const name = prompt('Enter list name:');
+                    const name = await showHtmlPrompt(document, {
+                        title: 'New list',
+                        message: 'Enter a name for the list.',
+                        placeholder: 'List name',
+                        confirmLabel: 'Create'
+                    });
                     if (name && name.trim()) {
                         await PlaybackState.createList(name.trim());
                         refreshAllDropdowns();
@@ -1683,7 +1843,9 @@ if (window.location.pathname.startsWith('/embed/')) {
             shuffle: '<path d="M4 7h3.5c4 0 5 10 9 10H20M17 14l3 3-3 3M4 17h3.5c1.5 0 2.6-1.4 3.7-3M17 4l3 3-3 3"/>',
             repeat: '<path d="M17 2l3 3-3 3M20 5H8a4 4 0 0 0-4 4v1M7 22l-3-3 3-3M4 19h12a4 4 0 0 0 4-4v-1"/>',
             list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
-            focus: '<path d="M9 7l-5 5 5 5M4 12h11a5 5 0 0 1 5 5"/>'
+            focus: '<path d="M9 7l-5 5 5 5M4 12h11a5 5 0 0 1 5 5"/>',
+            gear: '<path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.37a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.63 15 1.7 1.7 0 0 0 3.08 14H3v-4h.08A1.7 1.7 0 0 0 4.63 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.63h.01A1.7 1.7 0 0 0 10 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.63a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.37 9v.01A1.7 1.7 0 0 0 20.92 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15z"/>',
+            chevronRight: '<path d="M9 5l7 7-7 7"/>'
         };
         return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name] || ''}</svg>`;
     }
@@ -2012,7 +2174,72 @@ if (window.location.pathname.startsWith('/embed/')) {
                             display: flex;
                             justify-content: space-between;
                             align-items: center;
+                            gap: 6px;
                         }
+                        .pip-sidebar-heading {
+                            min-width: 0;
+                            flex: 1;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            white-space: nowrap;
+                        }
+                        .pip-sidebar-source-wrap { position: relative; flex: 1; min-width: 0; }
+                        button.pip-sidebar-heading {
+                            width: 100%; padding: 4px 6px; border: 0; border-radius: 6px;
+                            color: #fff; background: transparent; text-align: left; cursor: pointer;
+                        }
+                        button.pip-sidebar-heading:hover { background: rgba(255,255,255,.07); }
+                        .pip-sidebar-source-menu {
+                            display: none; position: absolute; top: 26px; left: 0; z-index: 21;
+                            min-width: 150px; max-width: 190px; padding: 5px; background: #18181b;
+                            border: 1px solid rgba(255,255,255,.1); border-radius: 8px;
+                            box-shadow: 0 8px 24px rgba(0,0,0,.45);
+                        }
+                        .pip-sidebar-source-menu.open { display: block; }
+                        .pip-sidebar-source-menu button {
+                            width: 100%; padding: 7px 8px; border: 0; border-radius: 5px;
+                            color: #ddd; background: transparent; text-align: left; font-size: 10px;
+                            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+                        }
+                        .pip-sidebar-source-menu button:hover { color: #fff; background: rgba(255,255,255,.08); }
+                        .pip-sidebar-source-menu button.active { color: #fff; background: rgba(255,78,85,.16); }
+                        .pip-sidebar-menu-wrap { position: relative; }
+                        .pip-sidebar-icon-btn {
+                            width: 26px;
+                            height: 26px;
+                            padding: 5px;
+                            color: #d8d8dc;
+                            background: transparent;
+                            border: 1px solid rgba(255,255,255,.1);
+                            border-radius: 6px;
+                            cursor: pointer;
+                            display: grid;
+                            place-items: center;
+                        }
+                        .pip-sidebar-icon-btn:hover { background: rgba(255,255,255,.08); color: #fff; }
+                        .pip-sidebar-icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+                        .pip-sidebar-menu {
+                            display: none;
+                            position: absolute;
+                            top: 26px;
+                            right: 0;
+                            z-index: 20;
+                            min-width: 142px;
+                            padding: 5px;
+                            background: #18181b;
+                            border: 1px solid rgba(255,255,255,.1);
+                            border-radius: 8px;
+                            box-shadow: 0 8px 24px rgba(0,0,0,.45);
+                        }
+                        .pip-sidebar-menu.open { display: block; }
+                        .pip-sidebar-menu button {
+                            width: 100%; padding: 7px 8px; border: 0; border-radius: 5px;
+                            color: #ddd; background: transparent; text-align: left; font-size: 10px; cursor: pointer;
+                        }
+                        .pip-sidebar-menu button:hover:not(:disabled) { background: rgba(255,255,255,.08); color: #fff; }
+                        .pip-sidebar-menu button.danger { color: #ff7479; }
+                        .pip-sidebar-menu button:disabled { opacity: .35; cursor: default; }
+                        .pip-sidebar-menu-divider { height: 1px; margin: 4px; background: rgba(255,255,255,.08); }
                         .pip-sidebar-close {
                             background: none;
                             border: none;
@@ -2057,6 +2284,12 @@ if (window.location.pathname.startsWith('/embed/')) {
                         }
                         .pip-sidebar-item.active {
                             background: rgba(255, 0, 0, 0.2);
+                        }
+                        .pip-sidebar-item.dragging {
+                            opacity: .38;
+                        }
+                        .pip-sidebar-item.drag-over {
+                            box-shadow: inset 0 2px 0 #ff4e55;
                         }
                         .pip-sidebar-thumb {
                             width: 60px;
@@ -2160,8 +2393,22 @@ if (window.location.pathname.startsWith('/embed/')) {
                         </div>
                         <div class="pip-sidebar" id="pip-sidebar">
                             <div class="pip-sidebar-header">
-                                <span id="pip-sidebar-title">Playlist</span>
-                                <button class="pip-sidebar-close" id="pip-sidebar-close" title="Close">✕</button>
+                                <div class="pip-sidebar-source-wrap">
+                                    <button class="pip-sidebar-heading" id="pip-sidebar-title" title="Switch list">Playlist ▾</button>
+                                    <div class="pip-sidebar-source-menu" id="pip-sidebar-source-menu"></div>
+                                </div>
+                                <div class="pip-sidebar-menu-wrap">
+                                    <button class="pip-sidebar-icon-btn" id="pip-sidebar-menu-toggle" title="List options" aria-label="List options">${controlIcon('gear')}</button>
+                                    <div class="pip-sidebar-menu" id="pip-sidebar-menu">
+                                        <button data-action="sort" data-sort="title-asc">Sort A–Z</button>
+                                        <button data-action="sort" data-sort="title-desc">Sort Z–A</button>
+                                        <div class="pip-sidebar-menu-divider"></div>
+                                        <button data-action="rename">Rename list</button>
+                                        <button data-action="clear">Clear list</button>
+                                        <button class="danger" data-action="delete">Delete list</button>
+                                    </div>
+                                </div>
+                                <button class="pip-sidebar-close pip-sidebar-icon-btn" id="pip-sidebar-close" title="Close list" aria-label="Close list">${controlIcon('chevronRight')}</button>
                             </div>
                             <div class="pip-sidebar-list" id="pip-sidebar-list">
                             </div>
@@ -2568,6 +2815,11 @@ if (window.location.pathname.startsWith('/embed/')) {
         const sidebar = doc.getElementById('pip-sidebar');
         const sidebarList = doc.getElementById('pip-sidebar-list');
         const sidebarTitle = doc.getElementById('pip-sidebar-title');
+        const sidebarSourceMenu = doc.getElementById('pip-sidebar-source-menu');
+        const sidebarSourceWrap = sidebarTitle.closest('.pip-sidebar-source-wrap');
+        const sidebarMenuToggle = doc.getElementById('pip-sidebar-menu-toggle');
+        const sidebarMenu = doc.getElementById('pip-sidebar-menu');
+        const sidebarMenuWrap = sidebarMenuToggle.closest('.pip-sidebar-menu-wrap');
         const listToggle = doc.getElementById('pip-list-toggle');
         const sidebarClose = doc.getElementById('pip-sidebar-close');
 
@@ -2584,6 +2836,85 @@ if (window.location.pathname.startsWith('/embed/')) {
         sidebarClose.addEventListener('click', (e) => {
             e.stopPropagation();
             sidebar.classList.remove('open');
+        });
+
+        sidebarTitle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            let html = `<button data-source="queue" class="${PlaybackState.activeSource === 'queue' ? 'active' : ''}">Queue (${PlaybackState.queue.length})</button>`;
+            Object.entries(PlaybackState.lists).forEach(([id, list]) => {
+                html += `<button data-source="list:${id}" class="${PlaybackState.activeSource === `list:${id}` ? 'active' : ''}">${escapeHTML(list.name)} (${list.items.length})</button>`;
+            });
+            sidebarSourceMenu.innerHTML = html;
+            sidebarSourceMenu.classList.toggle('open');
+        });
+        setupDelayedMenuClose(sidebarSourceWrap, sidebarSourceMenu);
+        sidebarSourceMenu.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const button = e.target.closest('[data-source]');
+            if (!button) return;
+            PlaybackState.switchSource(button.dataset.source);
+            const firstVideo = PlaybackState.getActiveItems()[0];
+            if (firstVideo) navigateToVideo(firstVideo);
+            sidebarSourceMenu.classList.remove('open');
+            updateSidebar();
+            updateNavButtons();
+        });
+
+        sidebarMenuToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const deleteButton = sidebarMenu.querySelector('[data-action="delete"]');
+            const renameButton = sidebarMenu.querySelector('[data-action="rename"]');
+            const clearButton = sidebarMenu.querySelector('[data-action="clear"]');
+            const isList = PlaybackState.activeSource?.startsWith('list:');
+            deleteButton.disabled = !isList;
+            renameButton.disabled = !isList;
+            clearButton.textContent = PlaybackState.activeSource === 'queue' ? 'Clear queue' : 'Clear list';
+            sidebarMenu.classList.toggle('open');
+        });
+        setupDelayedMenuClose(sidebarMenuWrap, sidebarMenu);
+
+        sidebarMenu.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const button = e.target.closest('[data-action]');
+            if (!button || button.disabled) return;
+            const action = button.dataset.action;
+            if (action === 'sort') {
+                await Promise.all(PlaybackState.getActiveItems().map(fetchVideoTitle));
+                await PlaybackState.sortActiveItems(button.dataset.sort);
+            } else if (action === 'rename' && PlaybackState.activeSource?.startsWith('list:')) {
+                const listId = PlaybackState.activeSource.slice(5);
+                const currentName = PlaybackState.lists[listId]?.name || '';
+                const newName = await showHtmlPrompt(doc, {
+                    title: 'Rename list',
+                    message: 'Enter a new name for the list.',
+                    defaultValue: currentName,
+                    confirmLabel: 'Save'
+                });
+                if (newName && newName !== currentName) await PlaybackState.renameList(listId, newName);
+            } else if (action === 'clear') {
+                const label = PlaybackState.activeSource === 'queue' ? 'the queue' : 'this list';
+                const confirmed = await showHtmlConfirm(doc, {
+                    title: 'Clear contents',
+                    message: `Clear ${label}? This action cannot be undone.`,
+                    confirmLabel: 'Clear',
+                    danger: true
+                });
+                if (confirmed) await PlaybackState.clearActiveItems();
+            } else if (action === 'delete' && PlaybackState.activeSource?.startsWith('list:')) {
+                const listId = PlaybackState.activeSource.slice(5);
+                const confirmed = await showHtmlConfirm(doc, {
+                    title: 'Delete list',
+                    message: `Delete "${PlaybackState.lists[listId]?.name || 'list'}"? This action cannot be undone.`,
+                    confirmLabel: 'Delete',
+                    danger: true
+                });
+                if (confirmed) {
+                    await PlaybackState.deleteList(listId);
+                }
+            }
+            sidebarMenu.classList.remove('open');
+            updateSidebar();
+            updateNavButtons();
         });
 
         // Get YouTube thumbnail URL
@@ -2625,7 +2956,7 @@ if (window.location.pathname.startsWith('/embed/')) {
         // Update sidebar content
         function updateSidebar() {
             const items = PlaybackState.getActiveItems();
-            sidebarTitle.textContent = PlaybackState.getActiveSourceName();
+            sidebarTitle.textContent = `${PlaybackState.getActiveSourceName()} ▾`;
 
             if (items.length === 0) {
                 sidebarList.innerHTML = '<div class="pip-sidebar-empty">No videos</div>';
@@ -2641,7 +2972,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     titleCache[videoId] = cachedTitle; // Populate local cache
                 }
                 html += `
-                    <div class="pip-sidebar-item ${isActive ? 'active' : ''}" data-index="${index}" data-video-id="${videoId}">
+                    <div class="pip-sidebar-item ${isActive ? 'active' : ''}" draggable="true" data-index="${index}" data-video-id="${videoId}">
                         <img class="pip-sidebar-thumb" src="${getThumbUrl(videoId)}" alt="">
                         <div class="pip-sidebar-info">
                             <span class="pip-sidebar-title" data-video-id="${escapeHTML(videoId)}">${escapeHTML(cachedTitle || 'Loading...')}</span>
@@ -2674,6 +3005,30 @@ if (window.location.pathname.startsWith('/embed/')) {
                     PlaybackState.currentVideoId = videoId;
                     navigateToVideo(videoId);
                     updateSidebar();
+                });
+                item.addEventListener('dragstart', (e) => {
+                    item.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', item.dataset.index);
+                });
+                item.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    item.classList.add('drag-over');
+                });
+                item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+                item.addEventListener('drop', async (e) => {
+                    e.preventDefault();
+                    const fromIndex = Number.parseInt(e.dataTransfer.getData('text/plain'), 10);
+                    const toIndex = Number.parseInt(item.dataset.index, 10);
+                    await PlaybackState.reorderActiveItem(fromIndex, toIndex);
+                    updateSidebar();
+                    updateNavButtons();
+                });
+                item.addEventListener('dragend', () => {
+                    sidebarList.querySelectorAll('.dragging, .drag-over').forEach(el => {
+                        el.classList.remove('dragging', 'drag-over');
+                    });
                 });
             });
 
@@ -2862,9 +3217,23 @@ if (window.location.pathname.startsWith('/embed/')) {
             flexDirection: 'column'
         });
         sidebar.innerHTML = `
-            <div class="embed-sidebar-header" style="padding:8px 10px;background:#252525;border-bottom:1px solid #333;font-size:11px;font-weight:600;color:#fff;display:flex;justify-content:space-between;align-items:center;">
-                <span class="embed-sidebar-title">Playlist</span>
-                <button class="embed-sidebar-close" style="background:none;border:none;color:#888;cursor:pointer;font-size:14px;padding:0;line-height:1;" title="Close">✕</button>
+            <div class="embed-sidebar-header" style="padding:8px 10px;background:#252525;border-bottom:1px solid #333;font-size:11px;font-weight:600;color:#fff;display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                <div class="embed-sidebar-source-wrap">
+                    <button class="embed-sidebar-title" title="Switch list">Playlist ▾</button>
+                    <div class="embed-sidebar-source-menu"></div>
+                </div>
+                <div class="embed-sidebar-menu-wrap">
+                    <button class="embed-sidebar-icon-btn embed-sidebar-menu-toggle" title="List options" aria-label="List options">${controlIcon('gear')}</button>
+                    <div class="embed-sidebar-menu">
+                        <button data-action="sort" data-sort="title-asc">Sort A–Z</button>
+                        <button data-action="sort" data-sort="title-desc">Sort Z–A</button>
+                        <div class="embed-sidebar-menu-divider"></div>
+                        <button data-action="rename">Rename list</button>
+                        <button data-action="clear">Clear list</button>
+                        <button class="danger" data-action="delete">Delete list</button>
+                    </div>
+                </div>
+                <button class="embed-sidebar-close embed-sidebar-icon-btn" title="Close list" aria-label="Close list">${controlIcon('chevronRight')}</button>
             </div>
             <div class="embed-sidebar-list" style="flex:1;overflow-y:auto;overflow-x:hidden;"></div>
         `;
@@ -2985,6 +3354,11 @@ if (window.location.pathname.startsWith('/embed/')) {
         const sidebar = overlay.querySelector('.embed-sidebar');
         const sidebarList = overlay.querySelector('.embed-sidebar-list');
         const sidebarTitle = overlay.querySelector('.embed-sidebar-title');
+        const sidebarSourceMenu = overlay.querySelector('.embed-sidebar-source-menu');
+        const sidebarSourceWrap = overlay.querySelector('.embed-sidebar-source-wrap');
+        const sidebarMenuToggle = overlay.querySelector('.embed-sidebar-menu-toggle');
+        const sidebarMenu = overlay.querySelector('.embed-sidebar-menu');
+        const sidebarMenuWrap = sidebarMenuToggle.closest('.embed-sidebar-menu-wrap');
         const sidebarClose = overlay.querySelector('.embed-sidebar-close');
 
         let isPaused = false;
@@ -3143,6 +3517,85 @@ if (window.location.pathname.startsWith('/embed/')) {
             sidebar.style.width = '0';
         });
 
+        sidebarTitle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            let html = `<button data-source="queue" class="${PlaybackState.activeSource === 'queue' ? 'active' : ''}">Queue (${PlaybackState.queue.length})</button>`;
+            Object.entries(PlaybackState.lists).forEach(([id, list]) => {
+                html += `<button data-source="list:${id}" class="${PlaybackState.activeSource === `list:${id}` ? 'active' : ''}">${escapeHTML(list.name)} (${list.items.length})</button>`;
+            });
+            sidebarSourceMenu.innerHTML = html;
+            sidebarSourceMenu.classList.toggle('open');
+        });
+        setupDelayedMenuClose(sidebarSourceWrap, sidebarSourceMenu);
+        sidebarSourceMenu.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const button = e.target.closest('[data-source]');
+            if (!button) return;
+            PlaybackState.switchSource(button.dataset.source);
+            const firstVideo = PlaybackState.getActiveItems()[0];
+            if (firstVideo) navigateToVideo(firstVideo);
+            sidebarSourceMenu.classList.remove('open');
+            updateEmbedSidebar();
+            updateEmbedControls(overlay);
+        });
+
+        sidebarMenuToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const deleteButton = sidebarMenu.querySelector('[data-action="delete"]');
+            const renameButton = sidebarMenu.querySelector('[data-action="rename"]');
+            const clearButton = sidebarMenu.querySelector('[data-action="clear"]');
+            const isList = PlaybackState.activeSource?.startsWith('list:');
+            deleteButton.disabled = !isList;
+            renameButton.disabled = !isList;
+            clearButton.textContent = PlaybackState.activeSource === 'queue' ? 'Clear queue' : 'Clear list';
+            sidebarMenu.classList.toggle('open');
+        });
+        setupDelayedMenuClose(sidebarMenuWrap, sidebarMenu);
+
+        sidebarMenu.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const button = e.target.closest('[data-action]');
+            if (!button || button.disabled) return;
+            const action = button.dataset.action;
+            if (action === 'sort') {
+                await Promise.all(PlaybackState.getActiveItems().map(fetchEmbedVideoTitle));
+                await PlaybackState.sortActiveItems(button.dataset.sort);
+            } else if (action === 'rename' && PlaybackState.activeSource?.startsWith('list:')) {
+                const listId = PlaybackState.activeSource.slice(5);
+                const currentName = PlaybackState.lists[listId]?.name || '';
+                const newName = await showHtmlPrompt(document, {
+                    title: 'Rename list',
+                    message: 'Enter a new name for the list.',
+                    defaultValue: currentName,
+                    confirmLabel: 'Save'
+                });
+                if (newName && newName !== currentName) await PlaybackState.renameList(listId, newName);
+            } else if (action === 'clear') {
+                const label = PlaybackState.activeSource === 'queue' ? 'the queue' : 'this list';
+                const confirmed = await showHtmlConfirm(document, {
+                    title: 'Clear contents',
+                    message: `Clear ${label}? This action cannot be undone.`,
+                    confirmLabel: 'Clear',
+                    danger: true
+                });
+                if (confirmed) await PlaybackState.clearActiveItems();
+            } else if (action === 'delete' && PlaybackState.activeSource?.startsWith('list:')) {
+                const listId = PlaybackState.activeSource.slice(5);
+                const confirmed = await showHtmlConfirm(document, {
+                    title: 'Delete list',
+                    message: `Delete "${PlaybackState.lists[listId]?.name || 'list'}"? This action cannot be undone.`,
+                    confirmLabel: 'Delete',
+                    danger: true
+                });
+                if (confirmed) {
+                    await PlaybackState.deleteList(listId);
+                }
+            }
+            sidebarMenu.classList.remove('open');
+            updateEmbedSidebar();
+            updateEmbedControls(overlay);
+        });
+
         // Fetch video title helper
         async function fetchEmbedVideoTitle(videoId) {
             if (embedTitleCache[videoId]) return embedTitleCache[videoId];
@@ -3166,7 +3619,7 @@ if (window.location.pathname.startsWith('/embed/')) {
         // Update sidebar content
         function updateEmbedSidebar() {
             const items = PlaybackState.getActiveItems();
-            sidebarTitle.textContent = PlaybackState.getActiveSourceName();
+            sidebarTitle.textContent = `${PlaybackState.getActiveSourceName()} ▾`;
 
             if (items.length === 0) {
                 sidebarList.innerHTML = '<div style="padding:20px;text-align:center;color:#666;font-size:11px;">No videos</div>';
@@ -3179,7 +3632,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 const cachedTitle = embedTitleCache[videoId] || PlaybackState.getVideoTitle(videoId);
                 if (cachedTitle && !embedTitleCache[videoId]) embedTitleCache[videoId] = cachedTitle;
                 html += `
-                    <div class="embed-sidebar-item" data-index="${index}" data-video-id="${videoId}" style="display:flex;align-items:center;padding:6px 8px;gap:8px;cursor:pointer;border-bottom:1px solid #2a2a2a;${isActive ? 'background:rgba(255,0,0,0.2);' : ''}">
+                    <div class="embed-sidebar-item" draggable="true" data-index="${index}" data-video-id="${videoId}" style="display:flex;align-items:center;padding:6px 8px;gap:8px;cursor:pointer;border-bottom:1px solid #2a2a2a;${isActive ? 'background:rgba(255,0,0,0.2);' : ''}">
                         <img src="https://i.ytimg.com/vi/${videoId}/mqdefault.jpg" style="width:50px;height:28px;background:#333;border-radius:3px;flex-shrink:0;object-fit:cover;" alt="">
                         <span class="embed-sidebar-title" data-video-id="${escapeHTML(videoId)}" style="flex:1;font-size:10px;color:#fff;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3;">${escapeHTML(cachedTitle || 'Loading...')}</span>
                         <button class="embed-sidebar-delete" data-index="${index}" style="background:none;border:none;color:#666;cursor:pointer;font-size:12px;padding:4px;" title="Remove">✕</button>
@@ -3217,6 +3670,30 @@ if (window.location.pathname.startsWith('/embed/')) {
                 item.addEventListener('mouseleave', () => {
                     const isActive = parseInt(item.dataset.index) === PlaybackState.currentIndex;
                     item.style.background = isActive ? 'rgba(255,0,0,0.2)' : '';
+                });
+                item.addEventListener('dragstart', (e) => {
+                    item.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', item.dataset.index);
+                });
+                item.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    item.classList.add('drag-over');
+                });
+                item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+                item.addEventListener('drop', async (e) => {
+                    e.preventDefault();
+                    const fromIndex = Number.parseInt(e.dataTransfer.getData('text/plain'), 10);
+                    const toIndex = Number.parseInt(item.dataset.index, 10);
+                    await PlaybackState.reorderActiveItem(fromIndex, toIndex);
+                    updateEmbedSidebar();
+                    updateEmbedControls(overlay);
+                });
+                item.addEventListener('dragend', () => {
+                    sidebarList.querySelectorAll('.dragging, .drag-over').forEach(el => {
+                        el.classList.remove('dragging', 'drag-over');
+                    });
                 });
             });
 
