@@ -166,8 +166,11 @@ ytd-rich-grid-slim-media:hover .yt-preview-button {
 /* ===== PREVIEW BUTTON DROPDOWN ===== */
 .yt-preview-wrapper {
     position: absolute;
-    z-index: 2147483647;
+    z-index: 2147483647 !important;
     display: none;
+    pointer-events: auto !important;
+    isolation: isolate;
+    transform: translateZ(0);
 }
 
 /* Show wrapper on hover */
@@ -189,6 +192,8 @@ ytd-rich-grid-slim-media:hover .yt-preview-wrapper {
 .yt-preview-wrapper.bottom-right { bottom: 8px; right: 8px; }
 
 .yt-preview-btn-main {
+    position: relative;
+    z-index: 2147483647;
     background-color: rgba(28, 28, 28, 0.9);
     color: white;
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -201,6 +206,23 @@ ytd-rich-grid-slim-media:hover .yt-preview-wrapper {
     display: flex;
     align-items: center;
     gap: 4px;
+    pointer-events: auto !important;
+    touch-action: manipulation;
+}
+
+.yt-preview-wrapper,
+.yt-preview-wrapper * {
+    pointer-events: auto !important;
+}
+
+.yt-preview-btn-main::before {
+    content: '';
+    position: absolute;
+    inset: -5px;
+    z-index: -1;
+    border-radius: 8px;
+    background: transparent;
+    pointer-events: auto;
 }
 
 .yt-preview-btn-main:hover {
@@ -219,7 +241,8 @@ ytd-rich-grid-slim-media:hover .yt-preview-wrapper {
     top: 100%;
     left: 0;
     padding-top: 6px; /* Space for visual gap, but still hoverable */
-    z-index: 2147483647;
+    z-index: 2147483647 !important;
+    pointer-events: auto !important;
 }
 
 .yt-preview-dropdown-inner {

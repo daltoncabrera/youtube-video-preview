@@ -126,6 +126,7 @@ if (window.location.pathname.startsWith('/embed/')) {
     const PREVIEW_BTN_CLASS = "yt-preview-button";
     const PREVIEW_WRAPPER_CLASS = "yt-preview-wrapper";
     const Z_INDEX_POPUP = 2147483647;
+    const previewWrappersByHost = new WeakMap();
 
     function escapeHTML(value) {
         return String(value ?? '')
@@ -595,7 +596,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
                     Object.assign(overlay.style, {
                         width: size.width + 'px',
-                        height: (size.height + 78) + 'px',
+                        height: (size.height + 76) + 'px',
                         ...pos
                     });
                 }
@@ -671,6 +672,8 @@ if (window.location.pathname.startsWith('/embed/')) {
                 if (!thumbnail.querySelector(`.${PREVIEW_WRAPPER_CLASS}`)) {
                     createPreviewButton(thumbnail, anchor.getAttribute("href"));
                 }
+                const activeWrapper = previewWrappersByHost.get(thumbnail);
+                if (activeWrapper?._floatAboveYouTube) activeWrapper._floatAboveYouTube(e);
             }
         }
     }, true); // Capture phase
@@ -720,11 +723,17 @@ if (window.location.pathname.startsWith('/embed/')) {
             || targetContainer.closest('ytd-rich-grid-slim-media');
 
         const container = card || targetContainer;
+        // Keep the control in the thumbnail's own stacking context. YouTube adds
+        // hover overlays inside the thumbnail that can otherwise sit above a
+        // button appended to the outer card.
+        const buttonHost = targetContainer;
         const videoId = extractVideoId(videoUrl);
         if (!videoId) return;
 
-        // Check if wrapper already exists
-        let wrapper = container.querySelector(`.${PREVIEW_WRAPPER_CLASS}`);
+        // Check if wrapper already exists, including when it is temporarily
+        // portaled to document.body to escape YouTube's stacking contexts.
+        let wrapper = previewWrappersByHost.get(buttonHost)
+            || buttonHost.querySelector(`:scope > .${PREVIEW_WRAPPER_CLASS}`);
 
         if (wrapper) {
             // Update video ID if changed
@@ -742,6 +751,7 @@ if (window.location.pathname.startsWith('/embed/')) {
         wrapper.className = `${PREVIEW_WRAPPER_CLASS} ${btnPos}`;
         wrapper.dataset.videoId = videoId;
         wrapper.dataset.videoTitle = videoTitle || '';
+        wrapper._previewContainer = container;
 
         // Create main button
         const mainBtn = document.createElement("button");
@@ -757,16 +767,157 @@ if (window.location.pathname.startsWith('/embed/')) {
         wrapper.appendChild(dropdown);
 
         // Style adjustments
-        const style = window.getComputedStyle(container);
+        const style = window.getComputedStyle(buttonHost);
         if (style.position === 'static') {
-            container.style.position = 'relative';
+            buttonHost.style.position = 'relative';
         }
+        buttonHost.style.isolation = 'isolate';
 
         // Event handlers
         setupDropdownEvents(wrapper, dropdown);
 
-        container.appendChild(wrapper);
-        adjustWrapperPosition(wrapper, container);
+        buttonHost.appendChild(wrapper);
+        previewWrappersByHost.set(buttonHost, wrapper);
+        setupFloatingPreviewLayer(wrapper, buttonHost);
+        adjustWrapperPosition(wrapper, buttonHost);
+    }
+
+    function setupFloatingPreviewLayer(wrapper, host) {
+        let restoreTimer = null;
+        let watchdogInterval = null;
+        let isFloating = false;
+        let anchorRect = null;
+        let lastPointer = null;
+
+        const pointInsideRect = (point, rect) => Boolean(point && rect
+            && point.x >= rect.left && point.x <= rect.right
+            && point.y >= rect.top && point.y <= rect.bottom);
+
+        const positionFloatingWrapper = () => {
+            if (!anchorRect) return;
+            const margin = 10;
+            Object.assign(wrapper.style, {
+                display: 'block',
+                visibility: 'visible',
+                opacity: '1',
+                position: 'fixed',
+                zIndex: String(Z_INDEX_POPUP),
+                top: (anchorRect.top + margin) + 'px',
+                right: 'auto',
+                bottom: 'auto',
+                left: btnPos === 'top-right'
+                    ? 'auto'
+                    : btnPos === 'center'
+                        ? (anchorRect.left + anchorRect.width / 2) + 'px'
+                        : (anchorRect.left + margin) + 'px',
+                transform: btnPos === 'center' ? 'translateX(-50%)' : 'none'
+            });
+
+            if (btnPos === 'top-right') {
+                wrapper.style.right = (window.innerWidth - anchorRect.right + margin) + 'px';
+            }
+        };
+
+        const keepPreviewAlive = () => {
+            if (!isFloating) return;
+            if (wrapper.parentElement !== document.body) document.body.appendChild(wrapper);
+            wrapper.classList.add('floating');
+            positionFloatingWrapper();
+        };
+
+        const restore = () => {
+            clearTimeout(restoreTimer);
+            clearInterval(watchdogInterval);
+            watchdogInterval = null;
+            isFloating = false;
+            document.removeEventListener('pointermove', handlePointerMove, true);
+            if (host.isConnected) host.appendChild(wrapper);
+            else wrapper.remove();
+            wrapper.classList.remove('floating');
+            wrapper.style.removeProperty('display');
+            wrapper.style.removeProperty('visibility');
+            wrapper.style.removeProperty('opacity');
+            wrapper.style.removeProperty('position');
+            wrapper.style.removeProperty('z-index');
+            wrapper.style.removeProperty('top');
+            wrapper.style.removeProperty('right');
+            wrapper.style.removeProperty('bottom');
+            wrapper.style.removeProperty('left');
+            wrapper.style.removeProperty('transform');
+        };
+
+        const scheduleRestore = () => {
+            clearTimeout(restoreTimer);
+            restoreTimer = setTimeout(() => {
+                const wrapperRect = wrapper.isConnected ? wrapper.getBoundingClientRect() : null;
+                const stillInside = pointInsideRect(lastPointer, anchorRect)
+                    || pointInsideRect(lastPointer, wrapperRect)
+                    || (lastPointer?.target instanceof Node && wrapper.contains(lastPointer.target));
+
+                if (stillInside) {
+                    keepPreviewAlive();
+                    return;
+                }
+                restore();
+            }, 300);
+        };
+
+        const handlePointerMove = (event) => {
+            if (!isFloating) return;
+            lastPointer = { x: event.clientX, y: event.clientY, target: event.target };
+            const rect = anchorRect;
+            const insideThumbnail = pointInsideRect(lastPointer, rect);
+            const insidePreview = event.target instanceof Node && wrapper.contains(event.target);
+
+            if (insideThumbnail || insidePreview) {
+                clearTimeout(restoreTimer);
+            } else {
+                scheduleRestore();
+            }
+        };
+
+        const floatAboveYouTube = (event) => {
+            clearTimeout(restoreTimer);
+            if (!host.isConnected) return;
+
+            if (event && Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+                lastPointer = { x: event.clientX, y: event.clientY, target: event.target };
+            }
+            anchorRect = host.getBoundingClientRect();
+            isFloating = true;
+            wrapper.classList.add('floating');
+            document.body.appendChild(wrapper);
+            document.addEventListener('pointermove', handlePointerMove, true);
+            keepPreviewAlive();
+            clearInterval(watchdogInterval);
+            watchdogInterval = setInterval(keepPreviewAlive, 100);
+        };
+
+        wrapper._floatAboveYouTube = floatAboveYouTube;
+
+        host.addEventListener('mouseenter', floatAboveYouTube);
+        wrapper.addEventListener('mouseenter', () => clearTimeout(restoreTimer));
+
+        // Move out of YouTube's clickable card before the browser creates the
+        // subsequent click event. This prevents delegated SPA navigation from
+        // treating extension menu actions as clicks on the video link.
+        wrapper.addEventListener('pointerdown', (event) => {
+            floatAboveYouTube(event);
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        wrapper.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        wrapper.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        wrapper.addEventListener('auxclick', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
     }
 
     // Build dropdown HTML
@@ -903,6 +1054,8 @@ if (window.location.pathname.startsWith('/embed/')) {
 
     // Setup dropdown event handlers
     function setupDropdownEvents(wrapper, dropdown) {
+        if (dropdown.dataset.eventsBound === 'true') return;
+        dropdown.dataset.eventsBound = 'true';
         dropdown.addEventListener('click', async (e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -916,7 +1069,8 @@ if (window.location.pathname.startsWith('/embed/')) {
             const listId = btn.dataset.listId;
 
             // Check if this is a playlist item (for queue/list add actions)
-            const container = wrapper.closest('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, ytd-rich-item-renderer, ytd-video-renderer');
+            const container = wrapper._previewContainer
+                || wrapper.closest('ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer, ytd-rich-item-renderer, ytd-video-renderer');
             const videoUrl = container?.querySelector('a[href*="/watch"]')?.href || `https://www.youtube.com/watch?v=${videoId}`;
             const playlistInfo = detectYouTubePlaylist(container, videoUrl);
 
@@ -1549,7 +1703,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Request PiP window
             const pipWindow = await window.documentPictureInPicture.requestWindow({
                 width: size.width,
-                height: size.height + 52
+                height: size.height + 46
             });
 
             // Store reference
@@ -1598,8 +1752,8 @@ if (window.location.pathname.startsWith('/embed/')) {
                             border: none;
                         }
                         .pip-control-bar {
-                            flex: 0 0 52px;
-                            height: 52px;
+                            flex: 0 0 46px;
+                            height: 46px;
                             background: linear-gradient(180deg, #18181b 0%, #101012 100%);
                             border-top: 1px solid rgba(255, 255, 255, 0.08);
                             display: flex;
@@ -2594,7 +2748,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             minHeight: '200px',
             // Dynamic Props
             width: size.width + 'px',
-            height: (size.height + 78) + 'px',
+            height: (size.height + 76) + 'px',
             ...pos
         });
 
@@ -2674,8 +2828,8 @@ if (window.location.pathname.startsWith('/embed/')) {
         const controlBar = document.createElement('div');
         controlBar.className = 'embed-control-bar';
         Object.assign(controlBar.style, {
-            flex: '0 0 48px',
-            height: '48px',
+            flex: '0 0 46px',
+            height: '46px',
             background: 'linear-gradient(180deg, #18181b 0%, #101012 100%)',
             display: 'flex',
             alignItems: 'center',
