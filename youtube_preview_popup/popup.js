@@ -26,8 +26,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const lists = data.ytPreviewLists || {};
         const listIds = Object.keys(lists);
 
-        // Priority: queue first, then last list
-        if (queue.length > 0) {
+        const savedSource = data.ytPreviewActiveSource;
+        const savedIndex = Number.isInteger(data.ytPreviewCurrentIndex) ? data.ytPreviewCurrentIndex : 0;
+
+        // Resume the active source first; fall back to queue, then newest non-empty list.
+        if (savedSource === 'queue' && queue.length > 0) {
+            index = Math.min(Math.max(savedIndex, 0), queue.length - 1);
+            videoId = queue[index];
+            source = 'queue';
+        } else if (savedSource?.startsWith('list:') && lists[savedSource.slice(5)]?.items?.length) {
+            const activeList = lists[savedSource.slice(5)];
+            index = Math.min(Math.max(savedIndex, 0), activeList.items.length - 1);
+            videoId = activeList.items[index];
+            source = savedSource;
+        } else if (queue.length > 0) {
             videoId = queue[0];
             source = 'queue';
             index = 0;
@@ -58,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isActiveYouTube) {
             // Use current YouTube tab
-            chrome.tabs.sendMessage(activeTab.id, {
+            await chrome.tabs.sendMessage(activeTab.id, {
                 action: 'openPreview',
                 videoId: videoId,
                 source: source,
@@ -75,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             } else {
                 // Send message to first YouTube tab and focus it
-                chrome.tabs.sendMessage(ytTabs[0].id, {
+                await chrome.tabs.sendMessage(ytTabs[0].id, {
                     action: 'openPreview',
                     videoId: videoId,
                     source: source,

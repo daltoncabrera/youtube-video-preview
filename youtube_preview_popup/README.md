@@ -21,6 +21,7 @@ Watch videos in a native floating window that stays visible while you browse, wo
 - **Add videos to queue** without interrupting current playback
 - **Insert next** or **add to end** of your queue
 - Build your playlist on-the-fly as you discover videos
+- Queue position and active source are stored locally and shared across YouTube tabs
 
 ### Persistent Playlists
 - **Create custom lists** to save videos for later
@@ -39,7 +40,7 @@ Watch videos in a native floating window that stays visible while you browse, wo
 3. **Embedded Player** - Draggable overlay within the page
 
 ### Auto-Skip Ads
-Automatically skips or speeds through ads in embedded players for uninterrupted viewing.
+Attempts to click available skip controls and temporarily speeds ads in embedded players. It can be disabled in settings.
 
 ### Playlist Import
 Watching a YouTube playlist? Import all videos to your queue or create a new list with one click.
@@ -73,7 +74,8 @@ Watching a YouTube playlist? Import all videos to your queue or create a new lis
 - **Storage** - Save your playlists and preferences locally
 - **Tabs** - Open preview from extension popup
 - **No data collection** - Your viewing habits stay private
-- **No external servers** - Everything runs locally in your browser
+- **Hosted player page** - Playback modes use this project's GitHub Pages page, which embeds YouTube's official player
+- **No analytics or custom data collection** - Preferences, queues, lists, and cached titles stay in Chrome local storage
 
 ---
 

@@ -396,3 +396,88 @@ ytd-rich-grid-slim-media:hover .yt-preview-wrapper {
     border-radius: 4px;
     font-size: 10px;
 }
+
+/* Embedded player: controls live in their own surface below the video. */
+.yt-preview-embed-overlay .embed-player-area {
+    background: #000;
+}
+
+.yt-preview-embed-overlay .embed-control-bar {
+    position: relative;
+    z-index: 2;
+}
+
+.yt-preview-embed-overlay .embed-control-btn {
+    width: 32px;
+    height: 32px;
+    padding: 7px;
+    display: inline-grid;
+    place-items: center;
+    color: #d8d8dc;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    cursor: pointer;
+    transition: color .15s ease, background .15s ease, border-color .15s ease, transform .15s ease, opacity .15s ease;
+}
+
+.yt-preview-embed-overlay .embed-control-btn svg {
+    width: 17px;
+    height: 17px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.yt-preview-embed-overlay .embed-control-btn:hover:not(:disabled) {
+    color: #fff;
+    background: rgba(255, 255, 255, .08);
+    border-color: rgba(255, 255, 255, .08);
+}
+
+.yt-preview-embed-overlay .embed-control-btn:disabled {
+    opacity: .28 !important;
+    cursor: default;
+}
+
+.yt-preview-embed-overlay .embed-control-btn.primary {
+    width: 36px;
+    height: 36px;
+    padding: 9px;
+    color: #f2f2f4;
+    background: rgba(255, 255, 255, .08);
+    border-color: rgba(255, 255, 255, .1);
+    border-radius: 50%;
+}
+
+.yt-preview-embed-overlay .embed-control-btn.primary:hover:not(:disabled) {
+    color: #fff;
+    background: rgba(255, 255, 255, .14);
+    border-color: rgba(255, 255, 255, .16);
+    transform: scale(1.04);
+}
+
+.yt-preview-embed-overlay .embed-control-btn.embed-shuffle,
+.yt-preview-embed-overlay .embed-control-btn.embed-repeat {
+    opacity: .55;
+}
+
+.yt-preview-embed-overlay .embed-control-btn.active {
+    color: #ff4e55;
+    background: rgba(255, 54, 62, .1);
+    opacity: 1 !important;
+}
+
+.yt-preview-embed-overlay .embed-source-indicator {
+    border: 1px solid rgba(255, 255, 255, .08);
+    border-radius: 9px !important;
+    background: rgba(255, 255, 255, .055) !important;
+    padding: 7px 9px !important;
+    transition: background .15s ease;
+}
+
+.yt-preview-embed-overlay .embed-source-indicator:hover {
+    background: rgba(255, 255, 255, .1) !important;
+}

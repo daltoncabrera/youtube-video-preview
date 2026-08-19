@@ -1,6 +1,8 @@
 // --- Auto-Skip Logic for Embeds ---
 if (window.location.pathname.startsWith('/embed/')) {
     let autoSkipEnabled = true;
+    let modifiedAdVideo = null;
+    let previousVideoState = null;
 
     // Load setting (async)
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
@@ -18,8 +20,20 @@ if (window.location.pathname.startsWith('/embed/')) {
         });
     }
 
+    const restoreVideo = () => {
+        if (modifiedAdVideo && previousVideoState) {
+            modifiedAdVideo.muted = previousVideoState.muted;
+            modifiedAdVideo.playbackRate = previousVideoState.playbackRate;
+        }
+        modifiedAdVideo = null;
+        previousVideoState = null;
+    };
+
     setInterval(() => {
-        if (!autoSkipEnabled) return;
+        if (!autoSkipEnabled) {
+            restoreVideo();
+            return;
+        }
 
         // Method 1: Click Skip Buttons
         const skipSelectors = [
@@ -53,15 +67,18 @@ if (window.location.pathname.startsWith('/embed/')) {
         if (isAd) {
             const video = document.querySelector('video');
             if (video) {
-                // Force ad to end
-                video.muted = true;
-                video.playbackRate = 16;
-                if (isFinite(video.duration) && video.duration > 0) {
-                    video.currentTime = video.duration - 0.1; // Seek to almost end
+                if (modifiedAdVideo !== video) {
+                    restoreVideo();
+                    modifiedAdVideo = video;
+                    previousVideoState = { muted: video.muted, playbackRate: video.playbackRate };
                 }
+                video.muted = true;
+                video.playbackRate = 8;
             }
+        } else {
+            restoreVideo();
         }
-    }, 200); // Check very aggressively (5x per second)
+    }, 750);
 } else {
 
     // --- Zen Mode Logic (Popup Window) ---
@@ -110,6 +127,15 @@ if (window.location.pathname.startsWith('/embed/')) {
     const PREVIEW_WRAPPER_CLASS = "yt-preview-wrapper";
     const Z_INDEX_POPUP = 2147483647;
 
+    function escapeHTML(value) {
+        return String(value ?? '')
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#039;');
+    }
+
     // ====== PLAYBACK STATE MANAGEMENT ======
     const PlaybackState = {
         // Current playback source: null | 'queue' | 'list:listId'
@@ -147,13 +173,49 @@ if (window.location.pathname.startsWith('/embed/')) {
         async loadLists() {
             if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
                 return new Promise((resolve) => {
-                    chrome.storage.local.get(['ytPreviewLists', 'ytVideoTitles'], (result) => {
+                    chrome.storage.local.get([
+                        'ytPreviewLists', 'ytVideoTitles', 'ytPreviewQueue',
+                        'ytPreviewActiveSource', 'ytPreviewCurrentIndex', 'ytPreviewCurrentVideoId'
+                    ], (result) => {
                         this.lists = result.ytPreviewLists || {};
                         this.videoTitles = result.ytVideoTitles || {};
+                        this.queue = Array.isArray(result.ytPreviewQueue) ? result.ytPreviewQueue : [];
+                        this.activeSource = result.ytPreviewActiveSource || null;
+                        this.currentIndex = Number.isInteger(result.ytPreviewCurrentIndex)
+                            ? result.ytPreviewCurrentIndex
+                            : (this.queue.length ? 0 : -1);
+                        this.currentVideoId = result.ytPreviewCurrentVideoId || null;
+                        this.normalizePlayback();
                         resolve();
                     });
                 });
             }
+        },
+
+        normalizePlayback() {
+            const items = this.getActiveItems();
+            if (!items.length) {
+                this.currentIndex = -1;
+                if (this.activeSource) this.currentVideoId = null;
+                return;
+            }
+            this.currentIndex = Math.min(Math.max(this.currentIndex, 0), items.length - 1);
+            this.currentVideoId = items[this.currentIndex];
+        },
+
+        async savePlayback() {
+            if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+            await chrome.storage.local.set({
+                ytPreviewQueue: this.queue,
+                ytPreviewActiveSource: this.activeSource,
+                ytPreviewCurrentIndex: this.currentIndex,
+                ytPreviewCurrentVideoId: this.currentVideoId
+            });
+        },
+
+        commitPlayback() {
+            this.savePlayback().catch(error => console.warn('[State] Could not persist playback:', error));
+            this.notifyChange();
         },
 
         // Save lists to storage
@@ -215,7 +277,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             delete this.lists[listId];
             await this.saveLists();
             console.log('[List] Deleted:', listId);
-            this.notifyChange();
+            this.commitPlayback();
             return true;
         },
 
@@ -246,6 +308,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             this.queue = [];
             this.currentIndex = 0;
             this.currentVideoId = videoId;
+            this.commitPlayback();
         },
 
         // Queue insert: insert after current
@@ -272,7 +335,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 this.currentIndex = 0;
             }
             console.log('[Queue] Insert:', videoId, 'Queue:', this.queue, 'Index:', this.currentIndex);
-            this.notifyChange();
+            this.commitPlayback();
         },
 
         // Queue append: add to end
@@ -296,7 +359,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 this.currentIndex = 0;
             }
             console.log('[Queue] Append:', videoId, 'Queue:', this.queue, 'Index:', this.currentIndex);
-            this.notifyChange();
+            this.commitPlayback();
         },
 
         // List insert: insert after current in specified list
@@ -328,7 +391,8 @@ if (window.location.pathname.startsWith('/embed/')) {
 
             await this.saveLists();
             console.log('[List] Insert:', videoId, 'to list:', listId, 'Items:', this.lists[listId].items);
-            this.notifyChange();
+            if (this.activeSource === `list:${listId}`) this.commitPlayback();
+            else this.notifyChange();
         },
 
         // List append: add to end of specified list
@@ -352,7 +416,8 @@ if (window.location.pathname.startsWith('/embed/')) {
             items.push(videoId);
             await this.saveLists();
             console.log('[List] Append:', videoId, 'to list:', listId, 'Items:', this.lists[listId].items);
-            this.notifyChange();
+            if (this.activeSource === `list:${listId}`) this.commitPlayback();
+            else this.notifyChange();
         },
 
         // Navigation (respects repeatMode and shuffleMode from outer scope)
@@ -384,6 +449,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 } while (randomIndex === this.currentIndex && items.length > 1);
                 this.currentIndex = randomIndex;
                 this.currentVideoId = items[this.currentIndex];
+                this.commitPlayback();
                 return this.currentVideoId;
             }
 
@@ -391,6 +457,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (this.currentIndex < items.length - 1) {
                 this.currentIndex++;
                 this.currentVideoId = items[this.currentIndex];
+                this.commitPlayback();
                 return this.currentVideoId;
             }
 
@@ -398,6 +465,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (typeof repeatMode !== 'undefined' && repeatMode && items.length > 0) {
                 this.currentIndex = 0;
                 this.currentVideoId = items[0];
+                this.commitPlayback();
                 return this.currentVideoId;
             }
 
@@ -416,6 +484,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 } while (randomIndex === this.currentIndex && items.length > 1);
                 this.currentIndex = randomIndex;
                 this.currentVideoId = items[this.currentIndex];
+                this.commitPlayback();
                 return this.currentVideoId;
             }
 
@@ -423,6 +492,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (this.currentIndex > 0) {
                 this.currentIndex--;
                 this.currentVideoId = items[this.currentIndex];
+                this.commitPlayback();
                 return this.currentVideoId;
             }
 
@@ -430,6 +500,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (typeof repeatMode !== 'undefined' && repeatMode && items.length > 0) {
                 this.currentIndex = items.length - 1;
                 this.currentVideoId = items[this.currentIndex];
+                this.commitPlayback();
                 return this.currentVideoId;
             }
 
@@ -445,7 +516,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 this.currentVideoId = items[0];
             }
             console.log('[Source] Switched to:', source, 'Items:', items.length);
-            this.notifyChange();
+            this.commitPlayback();
         },
 
         // Get position info
@@ -457,7 +528,10 @@ if (window.location.pathname.startsWith('/embed/')) {
     };
 
     // Load lists on init
-    PlaybackState.loadLists();
+    const playbackReady = PlaybackState.loadLists().then(() => {
+        refreshAllDropdowns();
+        injectPlaylistPanelButtons();
+    });
 
     // --- Load Settings ---
     let currentStrategy = 'pip'; // Default
@@ -499,6 +573,18 @@ if (window.location.pathname.startsWith('/embed/')) {
                 }
                 if (changes.repeatMode !== undefined) repeatMode = changes.repeatMode.newValue;
                 if (changes.shuffleMode !== undefined) shuffleMode = changes.shuffleMode.newValue;
+                if (changes.ytPreviewLists) PlaybackState.lists = changes.ytPreviewLists.newValue || {};
+                if (changes.ytVideoTitles) PlaybackState.videoTitles = changes.ytVideoTitles.newValue || {};
+                if (changes.ytPreviewQueue) PlaybackState.queue = changes.ytPreviewQueue.newValue || [];
+                if (changes.ytPreviewActiveSource) PlaybackState.activeSource = changes.ytPreviewActiveSource.newValue || null;
+                if (changes.ytPreviewCurrentIndex) PlaybackState.currentIndex = changes.ytPreviewCurrentIndex.newValue;
+                if (changes.ytPreviewCurrentVideoId) PlaybackState.currentVideoId = changes.ytPreviewCurrentVideoId.newValue || null;
+
+                if (changes.ytPreviewLists || changes.ytPreviewQueue || changes.ytPreviewActiveSource ||
+                    changes.ytPreviewCurrentIndex || changes.ytPreviewCurrentVideoId) {
+                    PlaybackState.normalizePlayback();
+                    PlaybackState.notifyChange();
+                }
 
                 // Apply Live Updates to Active Overlay
                 const overlay = document.querySelector('.yt-preview-embed-overlay');
@@ -509,7 +595,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
                     Object.assign(overlay.style, {
                         width: size.width + 'px',
-                        height: size.height + 'px',
+                        height: (size.height + 78) + 'px',
                         ...pos
                     });
                 }
@@ -537,6 +623,15 @@ if (window.location.pathname.startsWith('/embed/')) {
 
     // --- Observer Logic ---
     // We need aggressive observation because YouTube native preview replaces DOM elements on hover.
+    let thumbnailScanTimer = null;
+    const scheduleThumbnailScan = () => {
+        if (thumbnailScanTimer) return;
+        thumbnailScanTimer = setTimeout(() => {
+            thumbnailScanTimer = null;
+            processThumbnails();
+        }, 250);
+    };
+
     const observer = new MutationObserver((mutations) => {
         // Determine if relevant nodes were added/removed
         let shouldProcess = false;
@@ -547,7 +642,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             }
         }
         if (shouldProcess) {
-            processThumbnails();
+            scheduleThumbnailScan();
         }
     });
 
@@ -573,7 +668,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
             if (anchor) {
                 // Check if button exists inside the thumbnail container
-                if (!thumbnail.querySelector(`.${PREVIEW_BTN_CLASS}`)) {
+                if (!thumbnail.querySelector(`.${PREVIEW_WRAPPER_CLASS}`)) {
                     createPreviewButton(thumbnail, anchor.getAttribute("href"));
                 }
             }
@@ -581,10 +676,10 @@ if (window.location.pathname.startsWith('/embed/')) {
     }, true); // Capture phase
 
     // Periodic cleanup/check
-    setInterval(processThumbnails, 1500);
+    setInterval(processThumbnails, 5000);
 
     // Check for playlist panel on watch pages
-    setInterval(injectPlaylistPanelButtons, 2000);
+    setInterval(injectPlaylistPanelButtons, 4000);
 
     function processThumbnails() {
         const links = document.querySelectorAll('a[href*="/watch?v="], a[href*="/shorts/"]');
@@ -605,9 +700,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             let target = parentThumbnail;
             if (!target) target = anchor;
 
-            if (target.getAttribute("aria-hidden") === "true") target.removeAttribute("aria-hidden");
-            const hiddenParent = target.closest('[aria-hidden="true"]');
-            if (hiddenParent) hiddenParent.removeAttribute("aria-hidden");
+            if (target.closest('[aria-hidden="true"]')) return;
 
             // Always attempt to create/update button
             createPreviewButton(target, anchor.getAttribute("href"));
@@ -707,7 +800,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 html += `
                     <div class="yt-preview-submenu">
                         <button class="yt-preview-dropdown-item">
-                            ${list.name} <span class="icon">▶</span>
+                            ${escapeHTML(list.name)} <span class="icon">▶</span>
                         </button>
                         <div class="yt-preview-submenu-content">
                             <div class="yt-preview-submenu-content-inner">
@@ -868,8 +961,9 @@ if (window.location.pathname.startsWith('/embed/')) {
                     // Move to the inserted video
                     PlaybackState.currentIndex = insertPos;
                     PlaybackState.currentVideoId = videoId;
+                    PlaybackState.commitPlayback();
                     console.log('[Preview Now] Inserted and playing:', videoId, 'Queue:', PlaybackState.queue, 'Index:', PlaybackState.currentIndex);
-                    PlaybackState.notifyChange();
+                    PlaybackState.commitPlayback();
                     openPreview(`https://www.youtube.com/watch?v=${videoId}`);
                     break;
 
@@ -1172,7 +1266,7 @@ if (window.location.pathname.startsWith('/embed/')) {
         dialog.innerHTML = `
             <div style="margin-bottom: 16px;">
                 <h3 style="margin: 0 0 8px 0; color: #fff; font-size: 16px;">Playlist Detected</h3>
-                <p style="margin: 0; color: #aaa; font-size: 12px;">${playlistInfo.name} (${playlistInfo.videoCount} videos)</p>
+                <p style="margin: 0; color: #aaa; font-size: 12px;">${escapeHTML(playlistInfo.name)} (${playlistInfo.videoCount} videos)</p>
             </div>
             <div style="display: flex; flex-direction: column; gap: 8px;">
                 <button class="dialog-btn" data-action="single" style="
@@ -1186,7 +1280,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     text-align: left;
                 ">
                     <strong>Add this video only</strong>
-                    <span style="display: block; font-size: 11px; color: #888; margin-top: 2px;">${videoTitle || videoId}</span>
+                    <span style="display: block; font-size: 11px; color: #888; margin-top: 2px;">${escapeHTML(videoTitle || videoId)}</span>
                 </button>
                 <button class="dialog-btn" data-action="all-new" style="
                     background: rgba(255, 0, 0, 0.2);
@@ -1199,7 +1293,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     text-align: left;
                 ">
                     <strong>Import entire playlist</strong>
-                    <span style="display: block; font-size: 11px; color: #888; margin-top: 2px;">Create new list: "${playlistInfo.name}"</span>
+                    <span style="display: block; font-size: 11px; color: #888; margin-top: 2px;">Create new list: "${escapeHTML(playlistInfo.name)}"</span>
                 </button>
                 <button class="dialog-btn" data-action="all-current" style="
                     background: rgba(255, 255, 255, 0.1);
@@ -1368,6 +1462,28 @@ if (window.location.pathname.startsWith('/embed/')) {
         return embedSrc;
     }
 
+    function getProxyOrigin(videoId) {
+        try {
+            return new URL(getProxyUrl(videoId), window.location.href).origin;
+        } catch {
+            return '*';
+        }
+    }
+
+    function controlIcon(name) {
+        const paths = {
+            previous: '<path d="M7 5v14M18 6l-8 6 8 6V6z"/>',
+            next: '<path d="M17 5v14M6 6l8 6-8 6V6z"/>',
+            pause: '<path d="M8 5h3v14H8zM14 5h3v14h-3z"/>',
+            play: '<path d="M8 5v14l11-7z"/>',
+            shuffle: '<path d="M4 7h3.5c4 0 5 10 9 10H20M17 14l3 3-3 3M4 17h3.5c1.5 0 2.6-1.4 3.7-3M17 4l3 3-3 3"/>',
+            repeat: '<path d="M17 2l3 3-3 3M20 5H8a4 4 0 0 0-4 4v1M7 22l-3-3 3-3M4 19h12a4 4 0 0 0 4-4v-1"/>',
+            list: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
+            focus: '<path d="M9 7l-5 5 5 5M4 12h11a5 5 0 0 1 5 5"/>'
+        };
+        return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name] || ''}</svg>`;
+    }
+
     // --- Dispatcher ---
     function openPreview(videoUrl) {
         const urlObj = new URL(videoUrl, "https://www.youtube.com");
@@ -1433,7 +1549,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Request PiP window
             const pipWindow = await window.documentPictureInPicture.requestWindow({
                 width: size.width,
-                height: size.height
+                height: size.height + 52
             });
 
             // Store reference
@@ -1463,94 +1579,118 @@ if (window.location.pathname.startsWith('/embed/')) {
                             font-family: Arial, sans-serif;
                         }
                         .pip-container {
-                            position: relative;
+                            display: flex;
+                            flex-direction: column;
                             width: 100%;
                             height: 100%;
+                            min-height: 0;
+                            background: #090909;
+                        }
+                        .pip-video-surface {
+                            flex: 1;
+                            min-height: 0;
+                            background: #000;
                         }
                         iframe {
+                            display: block;
                             width: 100%;
                             height: 100%;
                             border: none;
                         }
-                        /* Control Bar - Hidden by default, shows on hover */
                         .pip-control-bar {
-                            position: absolute;
-                            bottom: 0;
-                            left: 0;
-                            right: 0;
-                            height: 40px;
-                            background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
+                            flex: 0 0 52px;
+                            height: 52px;
+                            background: linear-gradient(180deg, #18181b 0%, #101012 100%);
+                            border-top: 1px solid rgba(255, 255, 255, 0.08);
                             display: flex;
                             align-items: center;
                             justify-content: space-between;
-                            padding: 0 12px;
-                            opacity: 0;
-                            transition: opacity 0.2s;
-                            pointer-events: none;
-                        }
-                        .pip-container:hover .pip-control-bar {
-                            opacity: 1;
-                            pointer-events: auto;
+                            padding: 0 10px;
+                            box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.18);
                         }
                         .pip-bar-left {
                             display: flex;
                             align-items: center;
-                            gap: 4px;
+                            gap: 6px;
                         }
                         .pip-bar-center {
                             display: flex;
                             align-items: center;
-                            gap: 4px;
+                            gap: 6px;
                         }
                         .pip-bar-right {
                             display: flex;
                             align-items: center;
-                            gap: 8px;
+                            gap: 6px;
                         }
                         .pip-bar-btn {
-                            background: none;
-                            border: none;
-                            color: white;
+                            width: 32px;
+                            height: 32px;
+                            background: transparent;
+                            border: 1px solid transparent;
+                            color: #d8d8dc;
                             cursor: pointer;
-                            font-size: 16px;
-                            padding: 6px;
-                            border-radius: 4px;
-                            transition: background 0.2s;
+                            padding: 7px;
+                            border-radius: 9px;
+                            transition: color .15s, background .15s, border-color .15s, transform .15s;
                             display: flex;
                             align-items: center;
                             justify-content: center;
                         }
+                        .pip-bar-btn svg, .pip-list-toggle svg {
+                            width: 17px;
+                            height: 17px;
+                            fill: none;
+                            stroke: currentColor;
+                            stroke-width: 1.8;
+                            stroke-linecap: round;
+                            stroke-linejoin: round;
+                        }
                         .pip-bar-btn:hover:not(:disabled) {
-                            background: rgba(255, 255, 255, 0.2);
+                            color: #fff;
+                            background: rgba(255, 255, 255, 0.08);
+                            border-color: rgba(255, 255, 255, 0.08);
                         }
                         .pip-bar-btn:disabled {
                             opacity: 0.3;
                             cursor: not-allowed;
                         }
                         .pip-bar-btn.pip-toggle-btn {
-                            font-size: 12px;
-                            opacity: 0.5;
+                            opacity: 0.58;
                         }
                         .pip-bar-btn.pip-toggle-btn.active {
                             opacity: 1;
-                            color: #ff4444;
+                            color: #ff4e55;
+                            background: rgba(255, 54, 62, 0.1);
                         }
                         .pip-bar-btn.pip-play-pause {
-                            font-size: 20px;
-                            padding: 6px 10px;
+                            width: 36px;
+                            height: 36px;
+                            color: #f2f2f4;
+                            background: rgba(255, 255, 255, 0.08);
+                            border-color: rgba(255, 255, 255, 0.1);
+                            border-radius: 50%;
+                            padding: 9px;
+                        }
+                        .pip-bar-btn.pip-play-pause:hover:not(:disabled) {
+                            color: #fff;
+                            background: rgba(255, 255, 255, 0.14);
+                            border-color: rgba(255, 255, 255, 0.16);
+                            transform: scale(1.04);
                         }
                         .pip-source-indicator {
                             position: relative;
-                            background: rgba(255, 255, 255, 0.1);
-                            color: white;
-                            padding: 4px 8px;
-                            border-radius: 4px;
-                            font-size: 10px;
+                            background: rgba(255, 255, 255, 0.055);
+                            border: 1px solid rgba(255, 255, 255, 0.08);
+                            color: #ededf0;
+                            padding: 7px 9px;
+                            border-radius: 9px;
+                            font-size: 11px;
                             cursor: pointer;
                             white-space: nowrap;
                         }
                         .pip-source-indicator:hover {
-                            background: rgba(255, 255, 255, 0.2);
+                            background: rgba(255, 255, 255, 0.1);
                         }
                         .pip-source-dropdown {
                             display: none;
@@ -1762,17 +1902,20 @@ if (window.location.pathname.startsWith('/embed/')) {
                             font-size: 11px;
                         }
                         .pip-list-toggle {
-                            background: none;
-                            border: none;
-                            color: white;
+                            width: 32px;
+                            height: 32px;
+                            display: grid;
+                            place-items: center;
+                            background: transparent;
+                            border: 1px solid transparent;
+                            color: #d8d8dc;
                             cursor: pointer;
-                            font-size: 14px;
-                            padding: 4px 6px;
-                            border-radius: 4px;
-                            margin-left: 6px;
+                            padding: 7px;
+                            border-radius: 9px;
                         }
                         .pip-list-toggle:hover {
-                            background: rgba(255, 255, 255, 0.2);
+                            color: #fff;
+                            background: rgba(255, 255, 255, 0.08);
                         }
                     </style>
                 </head>
@@ -1780,31 +1923,33 @@ if (window.location.pathname.startsWith('/embed/')) {
                     <div class="pip-main-wrapper">
                         <div class="pip-player-area">
                             <div class="pip-container">
-                                <iframe id="pip-iframe"
-                                    src="${embedSrc}"
-                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                    allowfullscreen>
-                                </iframe>
+                                <div class="pip-video-surface">
+                                    <iframe id="pip-iframe"
+                                        src="${embedSrc}"
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                        allowfullscreen>
+                                    </iframe>
+                                </div>
                                 <div class="pip-control-bar">
                                     <div class="pip-bar-left">
                                         <div class="pip-source-indicator" id="pip-source">
-                                            ${PlaybackState.getActiveSourceName()} ▼
+                                            ${escapeHTML(PlaybackState.getActiveSourceName())} ▼
                                             <div class="pip-source-dropdown" id="pip-source-dropdown">
                                                 ${sourceOptions}
                                             </div>
                                         </div>
-                                        <button class="pip-list-toggle" id="pip-list-toggle" title="Show playlist">☰</button>
+                                        <button class="pip-list-toggle" id="pip-list-toggle" title="Show playlist" aria-label="Show playlist">${controlIcon('list')}</button>
                                     </div>
                                     <div class="pip-bar-center">
-                                        <button class="pip-bar-btn" id="pip-prev" title="Previous">⏮</button>
-                                        <button class="pip-bar-btn pip-play-pause" id="pip-pause" title="Pause (requires proxy support)">⏸</button>
-                                        <button class="pip-bar-btn" id="pip-next" title="Next">⏭</button>
+                                        <button class="pip-bar-btn" id="pip-prev" title="Previous" aria-label="Previous">${controlIcon('previous')}</button>
+                                        <button class="pip-bar-btn pip-play-pause" id="pip-pause" title="Pause" aria-label="Pause">${controlIcon('pause')}</button>
+                                        <button class="pip-bar-btn" id="pip-next" title="Next" aria-label="Next">${controlIcon('next')}</button>
                                     </div>
                                     <div class="pip-bar-right">
-                                        <button class="pip-bar-btn pip-toggle-btn ${shuffleMode ? 'active' : ''}" id="pip-shuffle" title="Shuffle">🔀</button>
-                                        <button class="pip-bar-btn pip-toggle-btn ${repeatMode ? 'active' : ''}" id="pip-repeat" title="Repeat">🔁</button>
+                                        <button class="pip-bar-btn pip-toggle-btn ${shuffleMode ? 'active' : ''}" id="pip-shuffle" title="Shuffle" aria-label="Shuffle">${controlIcon('shuffle')}</button>
+                                        <button class="pip-bar-btn pip-toggle-btn ${repeatMode ? 'active' : ''}" id="pip-repeat" title="Repeat" aria-label="Repeat">${controlIcon('repeat')}</button>
                                         <span class="pip-queue-counter" id="pip-counter">${PlaybackState.getPositionInfo() || ''}</span>
-                                        <button class="pip-bar-btn" id="pip-focus-tab" title="Focus YouTube tab">🔙</button>
+                                        <button class="pip-bar-btn" id="pip-focus-tab" title="Focus YouTube tab" aria-label="Focus YouTube tab">${controlIcon('focus')}</button>
                                     </div>
                                 </div>
                             </div>
@@ -1860,7 +2005,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             const isEmpty = list.items.length === 0;
             html += `
                 <div class="pip-source-item ${isActive ? 'active' : ''} ${isEmpty ? 'disabled' : ''}" data-source="list:${id}">
-                    <span class="pip-source-name">${list.name} ${isEmpty ? '(empty)' : `(${list.items.length})`}</span>
+                    <span class="pip-source-name">${escapeHTML(list.name)} ${isEmpty ? '(empty)' : `(${list.items.length})`}</span>
                     <span class="pip-source-actions">
                         <button class="pip-list-action" data-action="rename" data-list-id="${id}" title="Rename">✎</button>
                         <button class="pip-list-action" data-action="delete" data-list-id="${id}" title="Delete">✕</button>
@@ -1892,7 +2037,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             counter.textContent = posInfo || '';
 
             const sourceIndicator = doc.getElementById('pip-source');
-            sourceIndicator.innerHTML = `${PlaybackState.getActiveSourceName()} ▼
+            sourceIndicator.innerHTML = `${escapeHTML(PlaybackState.getActiveSourceName())} ▼
                 <div class="pip-source-dropdown" id="pip-source-dropdown">
                     ${buildSourceOptions()}
                 </div>
@@ -1956,13 +2101,17 @@ if (window.location.pathname.startsWith('/embed/')) {
             console.log('[Pause] Button clicked, sending:', isPaused ? 'play' : 'pause');
             // Send message to iframe to toggle play/pause
             try {
-                iframe.contentWindow.postMessage({ action: isPaused ? 'play' : 'pause' }, '*');
+                iframe.contentWindow.postMessage(
+                    { action: isPaused ? 'play' : 'pause' },
+                    getProxyOrigin(PlaybackState.currentVideoId)
+                );
             } catch (err) {
                 console.warn('[Pause] postMessage failed:', err);
             }
             isPaused = !isPaused;
-            pauseBtn.textContent = isPaused ? '▶' : '⏸';
-            pauseBtn.title = isPaused ? 'Play (requires proxy support)' : 'Pause (requires proxy support)';
+            pauseBtn.innerHTML = controlIcon(isPaused ? 'play' : 'pause');
+            pauseBtn.title = isPaused ? 'Play' : 'Pause';
+            pauseBtn.setAttribute('aria-label', pauseBtn.title);
         });
 
         // Shuffle toggle handler
@@ -2201,7 +2350,7 @@ if (window.location.pathname.startsWith('/embed/')) {
         // Note: The iframe posts to its parent, which is the PiP window
         pipWindow.addEventListener('message', (e) => {
             // Verify it's a video ended event
-            if (e.data && e.data.action === 'videoEnded') {
+            if (e.source === iframe.contentWindow && e.data && e.data.action === 'videoEnded') {
                 console.log('[AutoPlay] Video ended, checking for next...');
                 const nextVideoId = PlaybackState.next();
                 if (nextVideoId) {
@@ -2293,7 +2442,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     <div class="pip-sidebar-item ${isActive ? 'active' : ''}" data-index="${index}" data-video-id="${videoId}">
                         <img class="pip-sidebar-thumb" src="${getThumbUrl(videoId)}" alt="">
                         <div class="pip-sidebar-info">
-                            <span class="pip-sidebar-title" data-video-id="${videoId}">${cachedTitle || 'Loading...'}</span>
+                            <span class="pip-sidebar-title" data-video-id="${escapeHTML(videoId)}">${escapeHTML(cachedTitle || 'Loading...')}</span>
                         </div>
                         <button class="pip-sidebar-delete" data-index="${index}" title="Remove">✕</button>
                     </div>
@@ -2387,6 +2536,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     }
                 }
             }
+            PlaybackState.commitPlayback();
             updateSidebar();
             updateNavButtons();
         }
@@ -2444,7 +2594,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             minHeight: '200px',
             // Dynamic Props
             width: size.width + 'px',
-            height: size.height + 'px',
+            height: (size.height + 78) + 'px',
             ...pos
         });
 
@@ -2460,6 +2610,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             background: 'none', border: 'none', color: '#ccc', fontSize: '24px', cursor: 'pointer', padding: '0 8px'
         });
         closeBtn.onclick = () => {
+            overlay.dispatchEvent(new Event('yt-preview-cleanup'));
             overlay.remove();
             PlaybackState.isPlaying = false;
             PlaybackState.onStateChange = null;
@@ -2523,32 +2674,34 @@ if (window.location.pathname.startsWith('/embed/')) {
         const controlBar = document.createElement('div');
         controlBar.className = 'embed-control-bar';
         Object.assign(controlBar.style, {
-            height: '36px',
-            background: '#181818',
+            flex: '0 0 48px',
+            height: '48px',
+            background: 'linear-gradient(180deg, #18181b 0%, #101012 100%)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '0 10px',
-            borderTop: '1px solid #333'
+            borderTop: '1px solid rgba(255,255,255,.08)',
+            boxShadow: '0 -8px 24px rgba(0,0,0,.18)'
         });
 
         controlBar.innerHTML = `
             <div class="embed-bar-left" style="display:flex;align-items:center;gap:6px;">
                 <div class="embed-source-indicator" style="position:relative;cursor:pointer;background:rgba(255,255,255,0.1);padding:4px 8px;border-radius:4px;font-size:11px;color:#fff;">
-                    <span class="embed-source-name">${PlaybackState.getActiveSourceName()}</span> ▼
+                    <span class="embed-source-name">${escapeHTML(PlaybackState.getActiveSourceName())}</span> ▼
                     <div class="embed-source-dropdown" style="display:none;position:absolute;bottom:100%;left:0;margin-bottom:4px;background:rgba(28,28,28,0.95);border:1px solid rgba(255,255,255,0.2);border-radius:6px;min-width:140px;box-shadow:0 4px 12px rgba(0,0,0,0.6);max-height:200px;overflow-y:auto;">
                     </div>
                 </div>
-                <button class="embed-list-toggle" style="background:none;border:none;color:#fff;cursor:pointer;font-size:14px;padding:4px 6px;border-radius:4px;" title="Show playlist">☰</button>
+                <button class="embed-control-btn embed-list-toggle" title="Show playlist" aria-label="Show playlist">${controlIcon('list')}</button>
             </div>
             <div class="embed-bar-center" style="display:flex;align-items:center;gap:8px;">
-                <button class="embed-prev" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;" title="Previous">⏮</button>
-                <button class="embed-pause" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;" title="Pause">⏸</button>
-                <button class="embed-next" style="background:none;border:none;color:#fff;font-size:16px;cursor:pointer;padding:4px 8px;" title="Next">⏭</button>
+                <button class="embed-control-btn embed-prev" title="Previous" aria-label="Previous">${controlIcon('previous')}</button>
+                <button class="embed-control-btn embed-pause primary" title="Pause" aria-label="Pause">${controlIcon('pause')}</button>
+                <button class="embed-control-btn embed-next" title="Next" aria-label="Next">${controlIcon('next')}</button>
             </div>
             <div class="embed-bar-right" style="display:flex;align-items:center;gap:6px;">
-                <button class="embed-shuffle ${shuffleMode ? 'active' : ''}" style="background:none;border:none;color:#fff;font-size:12px;cursor:pointer;padding:4px;opacity:${shuffleMode ? '1' : '0.5'};" title="Shuffle">🔀</button>
-                <button class="embed-repeat ${repeatMode ? 'active' : ''}" style="background:none;border:none;color:#fff;font-size:12px;cursor:pointer;padding:4px;opacity:${repeatMode ? '1' : '0.5'};" title="Repeat">🔁</button>
+                <button class="embed-control-btn embed-shuffle ${shuffleMode ? 'active' : ''}" title="Shuffle" aria-label="Shuffle">${controlIcon('shuffle')}</button>
+                <button class="embed-control-btn embed-repeat ${repeatMode ? 'active' : ''}" title="Repeat" aria-label="Repeat">${controlIcon('repeat')}</button>
                 <span class="embed-counter" style="font-size:11px;color:rgba(255,255,255,0.7);"></span>
             </div>
         `;
@@ -2580,19 +2733,22 @@ if (window.location.pathname.startsWith('/embed/')) {
             e.preventDefault();
         });
 
-        window.addEventListener('mousemove', (e) => {
+        const handleDragMove = (e) => {
             if (!isDragging) return;
             const dx = e.clientX - startX;
             const dy = e.clientY - startY;
             overlay.style.left = (initialLeft + dx) + 'px';
             overlay.style.top = (initialTop + dy) + 'px';
-        });
+        };
 
-        window.addEventListener('mouseup', () => { isDragging = false; });
+        const handleDragEnd = () => { isDragging = false; };
+        window.addEventListener('mousemove', handleDragMove);
+        window.addEventListener('mouseup', handleDragEnd);
 
         // Listen for video ended message from iframe
-        window.addEventListener('message', (e) => {
-            if (e.data && e.data.action === 'videoEnded') {
+        const handleEmbedMessage = (e) => {
+            const activeIframe = overlay.querySelector('iframe');
+            if (e.source === activeIframe?.contentWindow && e.data && e.data.action === 'videoEnded') {
                 console.log('[Embed AutoPlay] Video ended, checking for next...');
                 const nextVideoId = PlaybackState.next();
                 if (nextVideoId) {
@@ -2607,7 +2763,13 @@ if (window.location.pathname.startsWith('/embed/')) {
                     console.log('[Embed AutoPlay] No more videos in queue/list');
                 }
             }
-        });
+        };
+        window.addEventListener('message', handleEmbedMessage);
+        overlay.addEventListener('yt-preview-cleanup', () => {
+            window.removeEventListener('message', handleEmbedMessage);
+            window.removeEventListener('mousemove', handleDragMove);
+            window.removeEventListener('mouseup', handleDragEnd);
+        }, { once: true });
     }
 
     // Setup embed control bar events
@@ -2660,7 +2822,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 const isEmpty = list.items.length === 0;
                 html += `
                     <div class="embed-source-item ${isEmpty ? 'disabled' : ''}" data-source="list:${id}" style="padding:8px 12px;color:#fff;font-size:11px;cursor:${isEmpty ? 'not-allowed' : 'pointer'};display:flex;align-items:center;gap:8px;${isActive ? 'background:rgba(255,0,0,0.3);' : ''}${isEmpty ? 'opacity:0.4;' : ''}">
-                        ${list.name} ${isEmpty ? '(empty)' : `(${list.items.length})`}
+                        ${escapeHTML(list.name)} ${isEmpty ? '(empty)' : `(${list.items.length})`}
                     </div>
                 `;
             });
@@ -2702,7 +2864,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     PlaybackState.queue = [];
                     PlaybackState.currentIndex = -1;
                     PlaybackState.currentVideoId = null;
-                    PlaybackState.notifyChange();
+                    PlaybackState.commitPlayback();
                     updateSourceDropdown();
                     updateEmbedControls(overlay);
                     updateEmbedSidebar();
@@ -2735,9 +2897,13 @@ if (window.location.pathname.startsWith('/embed/')) {
             const iframe = overlay.querySelector('iframe');
             if (iframe && iframe.contentWindow) {
                 isPaused = !isPaused;
-                iframe.contentWindow.postMessage({ action: isPaused ? 'pause' : 'play' }, '*');
-                pauseBtn.textContent = isPaused ? '▶' : '⏸';
+                iframe.contentWindow.postMessage(
+                    { action: isPaused ? 'pause' : 'play' },
+                    getProxyOrigin(PlaybackState.currentVideoId)
+                );
+                pauseBtn.innerHTML = controlIcon(isPaused ? 'play' : 'pause');
                 pauseBtn.title = isPaused ? 'Play' : 'Pause';
+                pauseBtn.setAttribute('aria-label', pauseBtn.title);
             }
         });
 
@@ -2813,7 +2979,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                 html += `
                     <div class="embed-sidebar-item" data-index="${index}" data-video-id="${videoId}" style="display:flex;align-items:center;padding:6px 8px;gap:8px;cursor:pointer;border-bottom:1px solid #2a2a2a;${isActive ? 'background:rgba(255,0,0,0.2);' : ''}">
                         <img src="https://i.ytimg.com/vi/${videoId}/mqdefault.jpg" style="width:50px;height:28px;background:#333;border-radius:3px;flex-shrink:0;object-fit:cover;" alt="">
-                        <span class="embed-sidebar-title" data-video-id="${videoId}" style="flex:1;font-size:10px;color:#fff;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3;">${cachedTitle || 'Loading...'}</span>
+                        <span class="embed-sidebar-title" data-video-id="${escapeHTML(videoId)}" style="flex:1;font-size:10px;color:#fff;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3;">${escapeHTML(cachedTitle || 'Loading...')}</span>
                         <button class="embed-sidebar-delete" data-index="${index}" style="background:none;border:none;color:#666;cursor:pointer;font-size:12px;padding:4px;" title="Remove">✕</button>
                     </div>
                 `;
@@ -2911,6 +3077,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     }
                 }
             }
+            PlaybackState.commitPlayback();
             updateEmbedSidebar();
             updateEmbedControls(overlay);
         }
@@ -3046,7 +3213,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     <div class="yt-preview-dropdown-header">Add to list</div>`;
                 for (const id of listIds) {
                     listsHTML += `<button class="yt-preview-dropdown-item" data-action="add-to-list" data-list-id="${id}">
-                        + ${lists[id].name}
+                        + ${escapeHTML(lists[id].name)}
                     </button>`;
                 }
             }
@@ -3276,24 +3443,25 @@ if (window.location.pathname.startsWith('/embed/')) {
     // Listen for messages from popup to open preview
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.action === 'openPreview') {
-            const { videoId, source, index } = message;
+            playbackReady.then(() => {
+                const { videoId, source, index } = message;
 
-            // Set the playback state
-            if (source === 'queue') {
-                PlaybackState.activeSource = 'queue';
-                PlaybackState.currentIndex = index;
-            } else if (source && source.startsWith('list:')) {
-                PlaybackState.activeSource = source;
-                PlaybackState.currentIndex = index;
-            }
+                if (source === 'queue') {
+                    PlaybackState.activeSource = 'queue';
+                    PlaybackState.currentIndex = index;
+                } else if (source && source.startsWith('list:')) {
+                    PlaybackState.activeSource = source;
+                    PlaybackState.currentIndex = index;
+                }
 
-            PlaybackState.currentVideoId = videoId;
-            PlaybackState.isPlaying = true;
+                PlaybackState.currentVideoId = videoId;
+                PlaybackState.isPlaying = true;
+                PlaybackState.commitPlayback();
 
-            // Open using configured strategy
-            openPreviewWithStrategy(videoId);
+                openPreviewWithStrategy(videoId);
 
-            sendResponse({ success: true });
+                sendResponse({ success: true });
+            }).catch(error => sendResponse({ success: false, error: error.message }));
         }
         return true;
     });
@@ -3306,7 +3474,8 @@ if (window.location.pathname.startsWith('/embed/')) {
         const index = parseInt(autoOpenParams.get('index') || '0', 10);
 
         // Wait for page to be ready, then open preview
-        setTimeout(() => {
+        setTimeout(async () => {
+            await playbackReady;
             // Set the playback state
             if (source === 'queue') {
                 PlaybackState.activeSource = 'queue';
@@ -3318,6 +3487,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
             PlaybackState.currentVideoId = autoOpenVideoId;
             PlaybackState.isPlaying = true;
+            PlaybackState.commitPlayback();
 
             // Open using configured strategy
             openPreviewWithStrategy(autoOpenVideoId);

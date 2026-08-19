@@ -151,7 +151,8 @@
             return urlParams.get(param);
         }
 
-        const videoId = getQueryParam('v');
+        const requestedVideoId = getQueryParam('v');
+        const videoId = /^[A-Za-z0-9_-]{11}$/.test(requestedVideoId || '') ? requestedVideoId : null;
         const playerContainer = document.getElementById('player-container');
         const landingContainer = document.getElementById('landing-page');
 
@@ -200,6 +201,9 @@
 
                 // Listen for postMessage commands from parent window (PiP controls)
                 window.addEventListener('message', function(e) {
+                    if (e.source !== window.parent || !/^https:\/\/([a-z0-9-]+\.)?youtube\.com$/i.test(e.origin)) {
+                        return;
+                    }
                     if (e.data && e.data.action === 'pause') {
                         player.pauseVideo();
                     } else if (e.data && e.data.action === 'play') {
@@ -212,7 +216,13 @@
                 // YT.PlayerState.ENDED = 0
                 if (event.data === YT.PlayerState.ENDED) {
                     // Notify parent window that video has ended (for auto-play next)
-                    window.parent.postMessage({ action: 'videoEnded' }, '*');
+                    let parentOrigin = '*';
+                    try {
+                        parentOrigin = new URL(document.referrer).origin;
+                    } catch (_) {
+                        // A missing referrer is possible in standalone player mode.
+                    }
+                    window.parent.postMessage({ action: 'videoEnded' }, parentOrigin);
                 }
             }
 
