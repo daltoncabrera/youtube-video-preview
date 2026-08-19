@@ -652,8 +652,10 @@ if (window.location.pathname.startsWith('/embed/')) {
         subtree: true
     });
 
-    // JUST-IN-TIME Injection for Hover survival
-    document.body.addEventListener('mouseenter', (e) => {
+    // JUST-IN-TIME injection and portal activation. pointerover runs before a
+    // possible pointerdown/click, so moving the control cannot cancel the
+    // user's first click.
+    document.body.addEventListener('pointerover', (e) => {
         if (!e.target || !e.target.closest) return;
         const thumbnail = e.target.closest('ytd-thumbnail') || e.target.closest('#thumbnail') || e.target.closest('ytd-reel-item-renderer');
 
@@ -911,7 +913,6 @@ if (window.location.pathname.startsWith('/embed/')) {
         // subsequent click event. This prevents delegated SPA navigation from
         // treating extension menu actions as clicks on the video link.
         wrapper.addEventListener('pointerdown', (event) => {
-            floatAboveYouTube(event);
             event.stopPropagation();
         });
         wrapper.addEventListener('mousedown', (event) => {
