@@ -777,9 +777,20 @@ if (window.location.pathname.startsWith('/embed/')) {
 
         // Event handlers
         setupDropdownEvents(wrapper, dropdown);
+        mainBtn.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            mainBtn.dataset.ignoreNextClick = 'true';
+            dropdown.querySelector('[data-action="preview-now"]')?.click();
+            setTimeout(() => { delete mainBtn.dataset.ignoreNextClick; }, 500);
+        });
         mainBtn.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (mainBtn.dataset.ignoreNextClick === 'true') {
+                delete mainBtn.dataset.ignoreNextClick;
+                return;
+            }
             dropdown.querySelector('[data-action="preview-now"]')?.click();
         });
 
@@ -1064,12 +1075,34 @@ if (window.location.pathname.startsWith('/embed/')) {
     function setupDropdownEvents(wrapper, dropdown) {
         if (dropdown.dataset.eventsBound === 'true') return;
         dropdown.dataset.eventsBound = 'true';
+
+        // Document PiP requires transient user activation. Execute menu actions
+        // during the trusted pointerdown instead of waiting for a delegated
+        // click, which YouTube can delay or consume on the first interaction.
+        dropdown.addEventListener('pointerdown', (event) => {
+            const button = event.target.closest('[data-action]');
+            if (!button) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+            button.dataset.ignoreNextTrustedClick = 'true';
+            button.click();
+
+            setTimeout(() => {
+                delete button.dataset.ignoreNextTrustedClick;
+            }, 500);
+        });
+
         dropdown.addEventListener('click', async (e) => {
             e.preventDefault();
             e.stopPropagation();
 
             const btn = e.target.closest('[data-action]');
             if (!btn) return;
+            if (e.isTrusted && btn.dataset.ignoreNextTrustedClick === 'true') {
+                delete btn.dataset.ignoreNextTrustedClick;
+                return;
+            }
 
             const action = btn.dataset.action;
             const videoId = wrapper.dataset.videoId;
