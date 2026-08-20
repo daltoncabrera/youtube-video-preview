@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const autoSkipCheckbox = document.getElementById('auto-skip');
     const repeatCheckbox = document.getElementById('repeat-mode');
     const shuffleCheckbox = document.getElementById('shuffle-mode');
+    const restorePromptCheckbox = document.getElementById('restore-preview-prompt');
     const status = document.getElementById('save-status');
     const openPreviewBtn = document.getElementById('open-preview-btn');
 
@@ -101,7 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Load saved settings
-    chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos', 'autoSkip', 'repeatMode', 'shuffleMode'], (result) => {
+    chrome.storage.local.get(['strategy', 'proxyUrl', 'defSize', 'defPos', 'btnPos', 'autoSkip', 'repeatMode', 'shuffleMode', 'restorePreviewPromptDisabled'], (result) => {
         // Default to 'pip' if not set
         const strategy = result.strategy || 'pip';
 
@@ -126,6 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
         autoSkipCheckbox.checked = (result.autoSkip !== false);
         repeatCheckbox.checked = (result.repeatMode === true);
         shuffleCheckbox.checked = (result.shuffleMode === true);
+        restorePromptCheckbox.checked = (result.restorePreviewPromptDisabled !== true);
     });
 
     // Handle Radio Change
@@ -150,6 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autoSkipCheckbox.addEventListener('change', triggerSave);
     repeatCheckbox.addEventListener('change', triggerSave);
     shuffleCheckbox.addEventListener('change', triggerSave);
+    restorePromptCheckbox.addEventListener('change', triggerSave);
 
     let timeout;
     function debounceSave() {
@@ -171,7 +174,8 @@ document.addEventListener('DOMContentLoaded', () => {
             btnPos: btnPosSelect.value,
             autoSkip: autoSkipCheckbox.checked,
             repeatMode: repeatCheckbox.checked,
-            shuffleMode: shuffleCheckbox.checked
+            shuffleMode: shuffleCheckbox.checked,
+            restorePreviewPromptDisabled: !restorePromptCheckbox.checked
         });
     }
 

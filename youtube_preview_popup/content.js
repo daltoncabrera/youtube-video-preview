@@ -233,6 +233,50 @@ if (window.location.pathname.startsWith('/embed/')) {
         return showHtmlDialog(doc, { ...options, input: true });
     }
 
+    function showRestorePreviewDialog(doc) {
+        return new Promise((resolve) => {
+            const backdrop = doc.createElement('div');
+            backdrop.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:18px;background:rgba(0,0,0,.68);backdrop-filter:blur(4px);';
+            const dialog = doc.createElement('div');
+            dialog.setAttribute('role', 'dialog');
+            dialog.setAttribute('aria-modal', 'true');
+            dialog.style.cssText = 'width:min(350px,100%);padding:18px;background:#1b1b1f;color:#f4f4f5;border:1px solid rgba(255,255,255,.11);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.55);font-family:Arial,sans-serif;';
+            dialog.innerHTML = `
+                <div style="font-size:14px;font-weight:700;margin-bottom:7px;">Restore Preview?</div>
+                <div style="font-size:12px;line-height:1.45;color:#aaaab0;margin-bottom:16px;">The page was reloaded while Preview was open.</div>
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                    <button data-choice="restore">Restore Preview</button>
+                    <button data-choice="never">No, don’t ask again</button>
+                    <button data-choice="cancel">Cancel</button>
+                </div>`;
+
+            const buttons = dialog.querySelectorAll('button');
+            buttons.forEach((button) => {
+                button.style.cssText = 'width:100%;min-height:36px;padding:0 12px;border:1px solid rgba(255,255,255,.1);border-radius:8px;background:rgba(255,255,255,.06);color:#ddd;cursor:pointer;font-weight:600;';
+            });
+            const restoreButton = dialog.querySelector('[data-choice="restore"]');
+            restoreButton.style.background = '#e8e8eb';
+            restoreButton.style.color = '#111';
+
+            const finish = (choice) => {
+                doc.removeEventListener('keydown', handleKeydown, true);
+                backdrop.remove();
+                resolve(choice);
+            };
+            const handleKeydown = (event) => {
+                if (event.key === 'Escape') finish('cancel');
+            };
+            buttons.forEach(button => button.addEventListener('click', () => finish(button.dataset.choice)));
+            backdrop.addEventListener('click', (event) => {
+                if (event.target === backdrop) finish('cancel');
+            });
+            doc.addEventListener('keydown', handleKeydown, true);
+            backdrop.appendChild(dialog);
+            (doc.body || doc.documentElement).appendChild(backdrop);
+            restoreButton.focus();
+        });
+    }
+
     function setupDelayedMenuClose(container, menu, delay = 280) {
         let closeTimer = null;
         const cancelClose = () => {
@@ -697,6 +741,7 @@ if (window.location.pathname.startsWith('/embed/')) {
     let btnPos = 'top-left'; // Button Default
     let repeatMode = false;
     let shuffleMode = false;
+    let pipRestoreUnloadHandler = null;
 
     function loadSettings() {
         if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
@@ -714,6 +759,44 @@ if (window.location.pathname.startsWith('/embed/')) {
         }
     }
     loadSettings();
+
+    async function offerPiPRestore() {
+        try {
+            const [preference, response] = await Promise.all([
+                chrome.storage.local.get('restorePreviewPromptDisabled'),
+                chrome.runtime.sendMessage({ action: 'takePiPRestore' })
+            ]);
+            const state = response?.state;
+            const isRecent = state?.timestamp && Date.now() - state.timestamp < 120000;
+            if (preference.restorePreviewPromptDisabled || !isRecent || !state.videoId) return;
+
+            const choice = await showRestorePreviewDialog(document);
+            if (choice === 'never') {
+                await chrome.storage.local.set({ restorePreviewPromptDisabled: true });
+                return;
+            }
+            if (choice !== 'restore') return;
+
+            PlaybackState.activeSource = state.source || 'queue';
+            const items = PlaybackState.getActiveItems();
+            let restoredIndex = items[state.index] === state.videoId
+                ? state.index
+                : items.indexOf(state.videoId);
+            if (restoredIndex === -1) {
+                PlaybackState.activeSource = 'queue';
+                PlaybackState.queue.push(state.videoId);
+                restoredIndex = PlaybackState.queue.length - 1;
+            }
+            PlaybackState.currentIndex = restoredIndex;
+            PlaybackState.currentVideoId = state.videoId;
+            PlaybackState.commitPlayback();
+            openPiPWindow(state.videoId);
+        } catch (error) {
+            console.warn('[YouTube Preview] Could not offer PiP restore:', error);
+        }
+    }
+
+    playbackReady.then(offerPiPRestore);
 
     // Listen for changes
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
@@ -2671,6 +2754,23 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Setup PiP control handlers
             setupPiPControls(pipWindow);
 
+            if (pipRestoreUnloadHandler) {
+                window.removeEventListener('beforeunload', pipRestoreUnloadHandler);
+            }
+            pipRestoreUnloadHandler = () => {
+                if (!PlaybackState.currentVideoId) return;
+                chrome.runtime.sendMessage({
+                    action: 'rememberPiPRestore',
+                    state: {
+                        videoId: PlaybackState.currentVideoId,
+                        source: PlaybackState.activeSource,
+                        index: PlaybackState.currentIndex,
+                        timestamp: Date.now()
+                    }
+                }).catch(() => {});
+            };
+            window.addEventListener('beforeunload', pipRestoreUnloadHandler);
+
             // Every Preview Now request activates the new/replaced PiP window.
             // Explicitly release that window before focusing the opener; a
             // plain opener focus() is ignored while PiP remains active.
@@ -2683,6 +2783,10 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Handle window close
             pipWindow.addEventListener('pagehide', () => {
                 console.log('[YouTube Preview] PiP window closed');
+                if (pipRestoreUnloadHandler) {
+                    window.removeEventListener('beforeunload', pipRestoreUnloadHandler);
+                    pipRestoreUnloadHandler = null;
+                }
                 PlaybackState.pipWindow = null;
                 PlaybackState.isPlaying = false;
                 PlaybackState.onStateChange = null; // Clear callback
