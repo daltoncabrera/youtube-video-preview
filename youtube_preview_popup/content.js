@@ -2025,11 +2025,21 @@ if (window.location.pathname.startsWith('/embed/')) {
         const toggle = item.querySelector(`.${prefix}-item-menu-toggle`);
         const menu = item.querySelector(`.${prefix}-item-options-menu`);
         if (!toggle || !menu) return;
+        let mouseLeaveTimer = null;
+        let listenerBindTimer = null;
 
         const closeMenu = () => {
+            clearTimeout(mouseLeaveTimer);
+            mouseLeaveTimer = null;
+            clearTimeout(listenerBindTimer);
+            listenerBindTimer = null;
             menu.style.display = 'none';
             menu.querySelectorAll('[data-item-submenu]').forEach(submenu => {
                 submenu.style.display = 'none';
+            });
+            menu.querySelectorAll('[data-item-submenu-toggle]').forEach(submenuToggle => {
+                submenuToggle.style.removeProperty('background');
+                submenuToggle.style.removeProperty('color');
             });
             if (toggle.parentElement && menu.parentElement !== toggle.parentElement) {
                 toggle.parentElement.appendChild(menu);
@@ -2037,6 +2047,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             doc.removeEventListener('pointerdown', closeOnOutsidePointer, true);
             doc.removeEventListener('focusin', closeOnOutsideFocus, true);
             doc.removeEventListener('keydown', closeOnEscape, true);
+            doc.removeEventListener('scroll', closeOnOutsideScroll, true);
             doc.defaultView.removeEventListener('blur', closeMenu);
         };
         const closeOnOutsidePointer = (event) => {
@@ -2047,6 +2058,9 @@ if (window.location.pathname.startsWith('/embed/')) {
         };
         const closeOnEscape = (event) => {
             if (event.key === 'Escape') closeMenu();
+        };
+        const closeOnOutsideScroll = (event) => {
+            if (!menu.contains(event.target)) closeMenu();
         };
         menu._closeItemMenu = closeMenu;
 
@@ -2068,6 +2082,34 @@ if (window.location.pathname.startsWith('/embed/')) {
             submenu.style.left = left + 'px';
             submenu.style.top = Math.max(6, Math.min(toggleRect.top, doc.defaultView.innerHeight - submenuHeight - 6)) + 'px';
         };
+        const openSubmenu = (submenuToggle) => {
+            const submenuName = submenuToggle.dataset.itemSubmenuToggle;
+            menu.querySelectorAll('[data-item-submenu-toggle]').forEach(candidate => {
+                const isActive = candidate === submenuToggle;
+                candidate.style.background = isActive ? 'rgba(255,255,255,.11)' : 'transparent';
+                candidate.style.color = isActive ? '#fff' : '#ddd';
+            });
+            menu.querySelectorAll('[data-item-submenu]').forEach(submenu => {
+                const shouldOpen = submenu.dataset.itemSubmenu === submenuName;
+                submenu.style.display = shouldOpen ? 'block' : 'none';
+                if (shouldOpen) positionSubmenu(submenu, submenuToggle);
+            });
+        };
+
+        menu.addEventListener('mouseenter', () => {
+            clearTimeout(mouseLeaveTimer);
+            mouseLeaveTimer = null;
+        });
+        menu.addEventListener('mouseleave', () => {
+            clearTimeout(mouseLeaveTimer);
+            mouseLeaveTimer = setTimeout(closeMenu, 240);
+        });
+        menu.addEventListener('focusout', (event) => {
+            if (!menu.contains(event.relatedTarget)) closeMenu();
+        });
+        menu.querySelectorAll('[data-item-submenu-toggle]').forEach(submenuToggle => {
+            submenuToggle.addEventListener('mouseenter', () => openSubmenu(submenuToggle));
+        });
 
         toggle.addEventListener('pointerdown', (event) => event.stopPropagation());
         toggle.addEventListener('click', (event) => {
@@ -2084,10 +2126,12 @@ if (window.location.pathname.startsWith('/embed/')) {
             doc.body.appendChild(menu);
             menu.style.display = 'block';
             positionMenu();
-            setTimeout(() => {
+            listenerBindTimer = setTimeout(() => {
+                listenerBindTimer = null;
                 doc.addEventListener('pointerdown', closeOnOutsidePointer, true);
                 doc.addEventListener('focusin', closeOnOutsideFocus, true);
                 doc.addEventListener('keydown', closeOnEscape, true);
+                doc.addEventListener('scroll', closeOnOutsideScroll, true);
                 doc.defaultView.addEventListener('blur', closeMenu);
             }, 0);
         });
@@ -2098,13 +2142,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             if (submenuToggle) {
                 event.preventDefault();
                 event.stopPropagation();
-                const submenuName = submenuToggle.dataset.itemSubmenuToggle;
-                menu.querySelectorAll('[data-item-submenu]').forEach(submenu => {
-                    const shouldOpen = submenu.dataset.itemSubmenu === submenuName
-                        && submenu.style.display !== 'block';
-                    submenu.style.display = shouldOpen ? 'block' : 'none';
-                    if (shouldOpen) positionSubmenu(submenu, submenuToggle);
-                });
+                openSubmenu(submenuToggle);
                 return;
             }
             const option = event.target.closest('[data-item-action]');
