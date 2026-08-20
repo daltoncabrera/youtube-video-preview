@@ -664,3 +664,23 @@ ytd-rich-grid-slim-media:hover .yt-preview-wrapper {
 .yt-preview-embed-overlay .embed-sidebar-item.drag-over {
     box-shadow: inset 0 2px 0 #ff4e55;
 }
+
+.yt-preview-embed-overlay .embed-item-menu-toggle {
+    opacity: 0;
+    transition: opacity .15s, color .15s, background .15s;
+}
+
+.yt-preview-embed-overlay .embed-sidebar-item:hover .embed-item-menu-toggle,
+.yt-preview-embed-overlay .embed-item-menu-toggle:focus {
+    opacity: 1;
+}
+
+.embed-item-options-menu button:hover:not(:disabled) {
+    color: #fff !important;
+    background: rgba(255, 255, 255, .08) !important;
+}
+
+.embed-item-options-menu button:disabled {
+    opacity: .35;
+    cursor: default !important;
+}

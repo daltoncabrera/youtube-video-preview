@@ -1155,6 +1155,9 @@ if (window.location.pathname.startsWith('/embed/')) {
                         </button>
                         <div class="yt-preview-submenu-content">
                             <div class="yt-preview-submenu-content-inner">
+                                <button class="yt-preview-dropdown-item primary" data-action="list-preview" data-list-id="${id}">
+                                    ▶ Preview Now
+                                </button>
                                 <button class="yt-preview-dropdown-item" data-action="list-insert" data-list-id="${id}">
                                     ↳ Insert next
                                 </button>
@@ -1290,7 +1293,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             const videoTitle = wrapper.dataset.videoTitle;
             const listId = btn.dataset.listId;
 
-            if (['queue-insert', 'queue-append', 'list-insert', 'list-append'].includes(action)) {
+            if (['queue-insert', 'queue-append', 'list-preview', 'list-insert', 'list-append'].includes(action)) {
                 dropdown.style.display = 'none';
                 wrapper._restoreFloatingPreview?.();
             }
@@ -1376,6 +1379,26 @@ if (window.location.pathname.startsWith('/embed/')) {
                     refreshAllDropdowns();
                     // Do NOT auto-play - just add to list
                     break;
+
+                case 'list-preview': {
+                    const targetList = PlaybackState.lists[listId];
+                    if (!targetList) break;
+
+                    let targetIndex = targetList.items.indexOf(videoId);
+                    if (targetIndex === -1) {
+                        targetList.items.push(videoId);
+                        targetIndex = targetList.items.length - 1;
+                        await PlaybackState.saveLists();
+                    }
+
+                    PlaybackState.activeSource = `list:${listId}`;
+                    PlaybackState.currentIndex = targetIndex;
+                    PlaybackState.currentVideoId = videoId;
+                    PlaybackState.commitPlayback();
+                    showNotification(`Playing from ${targetList.name}`);
+                    openPreview(`https://www.youtube.com/watch?v=${videoId}`);
+                    break;
+                }
 
                 case 'list-append':
                     await PlaybackState.listAppend(listId, videoId);
@@ -1881,6 +1904,191 @@ if (window.location.pathname.startsWith('/embed/')) {
         return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths[name] || ''}</svg>`;
     }
 
+    function buildItemOptionsMenu(prefix, index, itemCount) {
+        const activeListId = PlaybackState.activeSource?.startsWith('list:')
+            ? PlaybackState.activeSource.slice(5)
+            : null;
+        const targetLists = Object.entries(PlaybackState.lists)
+            .filter(([listId]) => listId !== activeListId);
+        const optionStyle = 'display:block;width:100%;padding:7px 10px;border:0;background:transparent;color:#ddd;text-align:left;font-size:11px;cursor:pointer;white-space:nowrap;';
+        const targetButtons = (action) => targetLists.length
+            ? targetLists.map(([listId, list]) => `<button style="${optionStyle}padding-left:18px;" data-item-action="${action}" data-list-id="${escapeHTML(listId)}">${escapeHTML(list.name)}</button>`).join('')
+            : `<button style="${optionStyle}padding-left:18px;opacity:.4;cursor:default;" disabled>No other lists</button>`;
+
+        return `
+            <div class="${prefix}-item-menu-wrap" style="position:relative;flex-shrink:0;">
+                <button class="${prefix}-item-menu-toggle" data-index="${index}" title="Video options" aria-label="Video options" style="width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:#aaa;cursor:pointer;font-size:18px;line-height:1;">⋮</button>
+                <div class="${prefix}-item-options-menu" style="display:none;position:fixed;z-index:2147483647;width:170px;padding:5px;background:#202024;border:1px solid rgba(255,255,255,.12);border-radius:9px;box-shadow:0 10px 28px rgba(0,0,0,.55);">
+                    <button style="${optionStyle}" data-item-action="move-beginning" ${index === 0 ? 'disabled' : ''}>Move to beginning</button>
+                    <button style="${optionStyle}" data-item-action="move-up" ${index === 0 ? 'disabled' : ''}>Move up</button>
+                    <button style="${optionStyle}" data-item-action="move-down" ${index === itemCount - 1 ? 'disabled' : ''}>Move down</button>
+                    <button style="${optionStyle}" data-item-action="move-end" ${index === itemCount - 1 ? 'disabled' : ''}>Move to end</button>
+                    <div style="height:1px;margin:4px;background:rgba(255,255,255,.1);"></div>
+                    <button style="${optionStyle}display:flex;justify-content:space-between;" data-item-submenu-toggle="move"><span>Move to list</span><span>›</span></button>
+                    <div data-item-submenu="move" style="display:none;position:fixed;z-index:2147483647;width:160px;max-height:240px;overflow-y:auto;padding:5px;background:#202024;border:1px solid rgba(255,255,255,.12);border-radius:9px;box-shadow:0 10px 28px rgba(0,0,0,.55);">
+                        ${targetButtons('move-to-list')}
+                    </div>
+                    <button style="${optionStyle}display:flex;justify-content:space-between;" data-item-submenu-toggle="copy"><span>Copy to list</span><span>›</span></button>
+                    <div data-item-submenu="copy" style="display:none;position:fixed;z-index:2147483647;width:160px;max-height:240px;overflow-y:auto;padding:5px;background:#202024;border:1px solid rgba(255,255,255,.12);border-radius:9px;box-shadow:0 10px 28px rgba(0,0,0,.55);">
+                        ${targetButtons('copy-to-list')}
+                    </div>
+                    <div style="height:1px;margin:4px;background:rgba(255,255,255,.1);"></div>
+                    <button style="${optionStyle}color:#ff7479;" data-item-action="delete">Delete</button>
+                </div>
+            </div>`;
+    }
+
+    function bindItemOptionsMenu(doc, item, prefix, onAction) {
+        const toggle = item.querySelector(`.${prefix}-item-menu-toggle`);
+        const menu = item.querySelector(`.${prefix}-item-options-menu`);
+        if (!toggle || !menu) return;
+
+        const closeMenu = () => {
+            menu.style.display = 'none';
+            menu.querySelectorAll('[data-item-submenu]').forEach(submenu => {
+                submenu.style.display = 'none';
+            });
+            if (toggle.parentElement && menu.parentElement !== toggle.parentElement) {
+                toggle.parentElement.appendChild(menu);
+            }
+            doc.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+            doc.removeEventListener('focusin', closeOnOutsideFocus, true);
+            doc.removeEventListener('keydown', closeOnEscape, true);
+            doc.defaultView.removeEventListener('blur', closeMenu);
+        };
+        const closeOnOutsidePointer = (event) => {
+            if (!menu.contains(event.target) && event.target !== toggle) closeMenu();
+        };
+        const closeOnOutsideFocus = (event) => {
+            if (!menu.contains(event.target) && event.target !== toggle) closeMenu();
+        };
+        const closeOnEscape = (event) => {
+            if (event.key === 'Escape') closeMenu();
+        };
+        menu._closeItemMenu = closeMenu;
+
+        const positionMenu = () => {
+            const rect = toggle.getBoundingClientRect();
+            const menuHeight = menu.offsetHeight;
+            menu.style.left = Math.max(6, rect.right - 170) + 'px';
+            menu.style.top = Math.max(6, Math.min(rect.bottom + 4, doc.defaultView.innerHeight - menuHeight - 6)) + 'px';
+        };
+        const positionSubmenu = (submenu, submenuToggle) => {
+            const menuRect = menu.getBoundingClientRect();
+            const toggleRect = submenuToggle.getBoundingClientRect();
+            const submenuWidth = submenu.offsetWidth;
+            const submenuHeight = submenu.offsetHeight;
+            const preferredLeft = menuRect.right + 6;
+            const left = preferredLeft + submenuWidth <= doc.defaultView.innerWidth - 6
+                ? preferredLeft
+                : Math.max(6, menuRect.left - submenuWidth - 6);
+            submenu.style.left = left + 'px';
+            submenu.style.top = Math.max(6, Math.min(toggleRect.top, doc.defaultView.innerHeight - submenuHeight - 6)) + 'px';
+        };
+
+        toggle.addEventListener('pointerdown', (event) => event.stopPropagation());
+        toggle.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            doc.querySelectorAll(`.${prefix}-item-options-menu`).forEach(other => {
+                if (other !== menu) other._closeItemMenu?.();
+            });
+            const opening = menu.style.display !== 'block';
+            if (!opening) {
+                closeMenu();
+                return;
+            }
+            doc.body.appendChild(menu);
+            menu.style.display = 'block';
+            positionMenu();
+            setTimeout(() => {
+                doc.addEventListener('pointerdown', closeOnOutsidePointer, true);
+                doc.addEventListener('focusin', closeOnOutsideFocus, true);
+                doc.addEventListener('keydown', closeOnEscape, true);
+                doc.defaultView.addEventListener('blur', closeMenu);
+            }, 0);
+        });
+
+        menu.addEventListener('pointerdown', (event) => event.stopPropagation());
+        menu.addEventListener('click', async (event) => {
+            const submenuToggle = event.target.closest('[data-item-submenu-toggle]');
+            if (submenuToggle) {
+                event.preventDefault();
+                event.stopPropagation();
+                const submenuName = submenuToggle.dataset.itemSubmenuToggle;
+                menu.querySelectorAll('[data-item-submenu]').forEach(submenu => {
+                    const shouldOpen = submenu.dataset.itemSubmenu === submenuName
+                        && submenu.style.display !== 'block';
+                    submenu.style.display = shouldOpen ? 'block' : 'none';
+                    if (shouldOpen) positionSubmenu(submenu, submenuToggle);
+                });
+                return;
+            }
+            const option = event.target.closest('[data-item-action]');
+            if (!option || option.disabled) return;
+            event.preventDefault();
+            event.stopPropagation();
+            closeMenu();
+            await onAction(option.dataset.itemAction, option.dataset.listId || null);
+        });
+    }
+
+    async function runItemOptionsAction(action, index, targetListId, removeItem, refresh) {
+        const items = PlaybackState.getActiveItems();
+        const videoId = items[index];
+        if (!videoId) return;
+
+        const moveTargets = {
+            'move-beginning': 0,
+            'move-up': Math.max(0, index - 1),
+            'move-down': Math.min(items.length - 1, index + 1),
+            'move-end': items.length - 1
+        };
+
+        if (Object.hasOwn(moveTargets, action)) {
+            await PlaybackState.reorderActiveItem(index, moveTargets[action]);
+            refresh();
+            return;
+        }
+        if (action === 'delete') {
+            await removeItem(index);
+            return;
+        }
+        if (['move-to-list', 'copy-to-list'].includes(action)
+            && targetListId && PlaybackState.lists[targetListId]) {
+            const source = PlaybackState.activeSource;
+            const wasCurrent = videoId === PlaybackState.currentVideoId;
+            await PlaybackState.listAppend(targetListId, videoId);
+            if (action === 'copy-to-list') {
+                refresh();
+                return;
+            }
+
+            // Remove from the original source without navigating the player.
+            // If the playing item was moved, make the destination list active
+            // and keep the same video ID loaded in the existing iframe.
+            const sourceItems = source === 'queue'
+                ? PlaybackState.queue
+                : PlaybackState.lists[source?.slice(5)]?.items;
+            if (!sourceItems || sourceItems[index] !== videoId) return;
+            sourceItems.splice(index, 1);
+
+            if (wasCurrent) {
+                PlaybackState.activeSource = `list:${targetListId}`;
+                PlaybackState.currentIndex = PlaybackState.lists[targetListId].items.indexOf(videoId);
+                PlaybackState.currentVideoId = videoId;
+            } else {
+                PlaybackState.currentIndex = PlaybackState.currentVideoId
+                    ? sourceItems.indexOf(PlaybackState.currentVideoId)
+                    : -1;
+            }
+
+            if (source?.startsWith('list:')) await PlaybackState.saveLists();
+            PlaybackState.commitPlayback();
+            refresh();
+        }
+    }
+
     // --- Dispatcher ---
     function openPreview(videoUrl) {
         const urlObj = new URL(videoUrl, "https://www.youtube.com");
@@ -2351,21 +2559,27 @@ if (window.location.pathname.startsWith('/embed/')) {
                             -webkit-box-orient: vertical;
                             line-height: 1.3;
                         }
-                        .pip-sidebar-delete {
+                        .pip-item-menu-toggle {
                             background: none;
                             border: none;
                             color: #666;
                             cursor: pointer;
-                            font-size: 12px;
+                            font-size: 18px;
                             padding: 4px;
                             opacity: 0;
                             transition: opacity 0.15s;
                         }
-                        .pip-sidebar-item:hover .pip-sidebar-delete {
+                        .pip-sidebar-item:hover .pip-item-menu-toggle,
+                        .pip-item-menu-toggle:focus {
                             opacity: 1;
                         }
-                        .pip-sidebar-delete:hover {
-                            color: #ff4444;
+                        .pip-item-options-menu button:hover:not(:disabled) {
+                            color: #fff !important;
+                            background: rgba(255,255,255,.08) !important;
+                        }
+                        .pip-item-options-menu button:disabled {
+                            opacity: .35;
+                            cursor: default !important;
                         }
                         .pip-sidebar-empty {
                             padding: 20px;
@@ -3028,6 +3242,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
         // Update sidebar content
         function updateSidebar() {
+            doc.querySelectorAll('.pip-item-options-menu').forEach(menu => menu._closeItemMenu?.());
             const items = PlaybackState.getActiveItems();
             sidebarTitle.textContent = `${PlaybackState.getActiveSourceName()} ▾`;
 
@@ -3050,7 +3265,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                         <div class="pip-sidebar-info">
                             <span class="pip-sidebar-title" data-video-id="${escapeHTML(videoId)}">${escapeHTML(cachedTitle || 'Loading...')}</span>
                         </div>
-                        <button class="pip-sidebar-delete" data-index="${index}" title="Remove">✕</button>
+                        ${buildItemOptionsMenu('pip', index, items.length)}
                     </div>
                 `;
             });
@@ -3071,7 +3286,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Attach event listeners
             sidebarList.querySelectorAll('.pip-sidebar-item').forEach(item => {
                 item.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('pip-sidebar-delete')) return;
+                    if (e.target.closest('.pip-item-menu-wrap')) return;
                     const index = parseInt(item.dataset.index);
                     const videoId = item.dataset.videoId;
                     PlaybackState.currentIndex = index;
@@ -3103,13 +3318,12 @@ if (window.location.pathname.startsWith('/embed/')) {
                         el.classList.remove('dragging', 'drag-over');
                     });
                 });
-            });
-
-            sidebarList.querySelectorAll('.pip-sidebar-delete').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const index = parseInt(btn.dataset.index);
-                    removeFromSource(index);
+                bindItemOptionsMenu(doc, item, 'pip', async (action, targetListId) => {
+                    const index = Number.parseInt(item.dataset.index, 10);
+                    await runItemOptionsAction(action, index, targetListId, removeFromSource, () => {
+                        updateSidebar();
+                        updateNavButtons();
+                    });
                 });
             });
 
@@ -3691,6 +3905,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
         // Update sidebar content
         function updateEmbedSidebar() {
+            document.querySelectorAll('.embed-item-options-menu').forEach(menu => menu._closeItemMenu?.());
             const items = PlaybackState.getActiveItems();
             sidebarTitle.textContent = `${PlaybackState.getActiveSourceName()} ▾`;
 
@@ -3708,7 +3923,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                     <div class="embed-sidebar-item" draggable="true" data-index="${index}" data-video-id="${videoId}" style="display:flex;align-items:center;padding:6px 8px;gap:8px;cursor:pointer;border-bottom:1px solid #2a2a2a;${isActive ? 'background:rgba(255,0,0,0.2);' : ''}">
                         <img src="https://i.ytimg.com/vi/${videoId}/mqdefault.jpg" style="width:50px;height:28px;background:#333;border-radius:3px;flex-shrink:0;object-fit:cover;" alt="">
                         <span class="embed-sidebar-title" data-video-id="${escapeHTML(videoId)}" style="flex:1;font-size:10px;color:#fff;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.3;">${escapeHTML(cachedTitle || 'Loading...')}</span>
-                        <button class="embed-sidebar-delete" data-index="${index}" style="background:none;border:none;color:#666;cursor:pointer;font-size:12px;padding:4px;" title="Remove">✕</button>
+                        ${buildItemOptionsMenu('embed', index, items.length)}
                     </div>
                 `;
             });
@@ -3726,7 +3941,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Attach click events
             sidebarList.querySelectorAll('.embed-sidebar-item').forEach(item => {
                 item.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('embed-sidebar-delete')) return;
+                    if (e.target.closest('.embed-item-menu-wrap')) return;
                     const index = parseInt(item.dataset.index);
                     const videoId = item.dataset.videoId;
                     PlaybackState.currentIndex = index;
@@ -3768,17 +3983,13 @@ if (window.location.pathname.startsWith('/embed/')) {
                         el.classList.remove('dragging', 'drag-over');
                     });
                 });
-            });
-
-            // Delete buttons
-            sidebarList.querySelectorAll('.embed-sidebar-delete').forEach(btn => {
-                btn.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    const index = parseInt(btn.dataset.index);
-                    await removeFromEmbedSource(index);
+                bindItemOptionsMenu(document, item, 'embed', async (action, targetListId) => {
+                    const index = Number.parseInt(item.dataset.index, 10);
+                    await runItemOptionsAction(action, index, targetListId, removeFromEmbedSource, () => {
+                        updateEmbedSidebar();
+                        updateEmbedControls(overlay);
+                    });
                 });
-                btn.addEventListener('mouseenter', () => btn.style.color = '#ff4444');
-                btn.addEventListener('mouseleave', () => btn.style.color = '#666');
             });
 
             // Scroll active into view
