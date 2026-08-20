@@ -128,6 +128,32 @@ if (window.location.pathname.startsWith('/embed/')) {
     const Z_INDEX_POPUP = 2147483647;
     const previewWrappersByHost = new WeakMap();
 
+    function hasValidExtensionContext() {
+        try {
+            return Boolean(chrome?.runtime?.id);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function sendRuntimeMessageSafely(message) {
+        if (!hasValidExtensionContext()) return Promise.resolve(null);
+        try {
+            return chrome.runtime.sendMessage(message).catch(() => null);
+        } catch (_) {
+            return Promise.resolve(null);
+        }
+    }
+
+    function saveLocalStateSafely(values) {
+        if (!hasValidExtensionContext()) return Promise.resolve();
+        try {
+            return chrome.storage.local.set(values).catch(() => {});
+        } catch (_) {
+            return Promise.resolve();
+        }
+    }
+
     function escapeHTML(value) {
         return String(value ?? '')
             .replaceAll('&', '&amp;')
@@ -361,8 +387,8 @@ if (window.location.pathname.startsWith('/embed/')) {
         },
 
         async savePlayback() {
-            if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
-            await chrome.storage.local.set({
+            if (!hasValidExtensionContext() || !chrome.storage?.local) return;
+            await saveLocalStateSafely({
                 ytPreviewQueue: this.queue,
                 ytPreviewActiveSource: this.activeSource,
                 ytPreviewCurrentIndex: this.currentIndex,
@@ -377,21 +403,15 @@ if (window.location.pathname.startsWith('/embed/')) {
 
         // Save lists to storage
         async saveLists() {
-            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-                return new Promise((resolve) => {
-                    chrome.storage.local.set({ ytPreviewLists: this.lists }, resolve);
-                });
-            }
+            if (!hasValidExtensionContext() || !chrome.storage?.local) return;
+            await saveLocalStateSafely({ ytPreviewLists: this.lists });
         },
 
         // Save video title
         async saveVideoTitle(videoId, title) {
             this.videoTitles[videoId] = title;
-            if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-                return new Promise((resolve) => {
-                    chrome.storage.local.set({ ytVideoTitles: this.videoTitles }, resolve);
-                });
-            }
+            if (!hasValidExtensionContext() || !chrome.storage?.local) return;
+            await saveLocalStateSafely({ ytVideoTitles: this.videoTitles });
         },
 
         // Get video title
@@ -764,7 +784,7 @@ if (window.location.pathname.startsWith('/embed/')) {
         try {
             const [preference, response] = await Promise.all([
                 chrome.storage.local.get('restorePreviewPromptDisabled'),
-                chrome.runtime.sendMessage({ action: 'takePiPRestore' })
+                sendRuntimeMessageSafely({ action: 'takePiPRestore' })
             ]);
             const state = response?.state;
             const isRecent = state?.timestamp && Date.now() - state.timestamp < 120000;
@@ -772,7 +792,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
             const choice = await showRestorePreviewDialog(document);
             if (choice === 'never') {
-                await chrome.storage.local.set({ restorePreviewPromptDisabled: true });
+                await saveLocalStateSafely({ restorePreviewPromptDisabled: true });
                 return;
             }
             if (choice !== 'restore') return;
@@ -2028,19 +2048,23 @@ if (window.location.pathname.startsWith('/embed/')) {
         let mouseLeaveTimer = null;
         let listenerBindTimer = null;
 
+        const closeSubmenus = () => {
+            menu.querySelectorAll('[data-item-submenu]').forEach(submenu => {
+                submenu.style.display = 'none';
+            });
+            menu.querySelectorAll('[data-item-submenu-toggle]').forEach(submenuToggle => {
+                submenuToggle.style.background = 'transparent';
+                submenuToggle.style.color = '#ddd';
+            });
+        };
+
         const closeMenu = () => {
             clearTimeout(mouseLeaveTimer);
             mouseLeaveTimer = null;
             clearTimeout(listenerBindTimer);
             listenerBindTimer = null;
             menu.style.display = 'none';
-            menu.querySelectorAll('[data-item-submenu]').forEach(submenu => {
-                submenu.style.display = 'none';
-            });
-            menu.querySelectorAll('[data-item-submenu-toggle]').forEach(submenuToggle => {
-                submenuToggle.style.removeProperty('background');
-                submenuToggle.style.removeProperty('color');
-            });
+            closeSubmenus();
             if (toggle.parentElement && menu.parentElement !== toggle.parentElement) {
                 toggle.parentElement.appendChild(menu);
             }
@@ -2104,11 +2128,21 @@ if (window.location.pathname.startsWith('/embed/')) {
             clearTimeout(mouseLeaveTimer);
             mouseLeaveTimer = setTimeout(closeMenu, 240);
         });
-        menu.addEventListener('focusout', (event) => {
-            if (!menu.contains(event.relatedTarget)) closeMenu();
-        });
         menu.querySelectorAll('[data-item-submenu-toggle]').forEach(submenuToggle => {
             submenuToggle.addEventListener('mouseenter', () => openSubmenu(submenuToggle));
+        });
+        menu.querySelectorAll(':scope > button:not([data-item-submenu-toggle])').forEach(mainAction => {
+            mainAction.addEventListener('mouseenter', closeSubmenus);
+        });
+        menu.querySelectorAll('[data-item-submenu]').forEach(submenu => {
+            submenu.addEventListener('mouseenter', () => {
+                clearTimeout(mouseLeaveTimer);
+                mouseLeaveTimer = null;
+            });
+            submenu.addEventListener('mouseleave', () => {
+                clearTimeout(mouseLeaveTimer);
+                mouseLeaveTimer = setTimeout(closeMenu, 240);
+            });
         });
 
         toggle.addEventListener('pointerdown', (event) => event.stopPropagation());
@@ -2212,6 +2246,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
     // --- Dispatcher ---
     function openPreview(videoUrl) {
+        if (!hasValidExtensionContext()) return;
         const urlObj = new URL(videoUrl, "https://www.youtube.com");
         // Use our robust extractor to ensure we catch shorts URLs too if passed here
         // (Although usually we extract before calling this, safe to re-check)
@@ -2250,9 +2285,7 @@ if (window.location.pathname.startsWith('/embed/')) {
     function focusOpenerWindow(pipWindow) {
         if (pipWindow.closed) return;
         pipWindow.blur();
-        chrome.runtime.sendMessage({ action: 'focusYouTubeWindow' }).catch((error) => {
-            console.warn('[YouTube Preview] Could not request window focus:', error);
-        });
+        sendRuntimeMessageSafely({ action: 'focusYouTubeWindow' });
     }
 
     async function openPiPWindow(videoId) {
@@ -2797,7 +2830,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             }
             pipRestoreUnloadHandler = () => {
                 if (!PlaybackState.currentVideoId) return;
-                chrome.runtime.sendMessage({
+                sendRuntimeMessageSafely({
                     action: 'rememberPiPRestore',
                     state: {
                         videoId: PlaybackState.currentVideoId,
@@ -2805,7 +2838,7 @@ if (window.location.pathname.startsWith('/embed/')) {
                         index: PlaybackState.currentIndex,
                         timestamp: Date.now()
                     }
-                }).catch(() => {});
+                });
             };
             window.addEventListener('beforeunload', pipRestoreUnloadHandler);
 
@@ -2999,7 +3032,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             shuffleMode = !shuffleMode;
             shuffleBtn.classList.toggle('active', shuffleMode);
             // Save to storage
-            chrome.storage.local.set({ shuffleMode });
+            saveLocalStateSafely({ shuffleMode });
             updateNavButtons();
         });
 
@@ -3010,7 +3043,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             repeatMode = !repeatMode;
             repeatBtn.classList.toggle('active', repeatMode);
             // Save to storage
-            chrome.storage.local.set({ repeatMode });
+            saveLocalStateSafely({ repeatMode });
             updateNavButtons();
         });
 
@@ -3918,7 +3951,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             shuffleMode = !shuffleMode;
             shuffleBtn.classList.toggle('active', shuffleMode);
             shuffleBtn.style.opacity = shuffleMode ? '1' : '0.5';
-            chrome.storage.local.set({ shuffleMode });
+            saveLocalStateSafely({ shuffleMode });
             updateEmbedControls(overlay);
         });
 
@@ -3928,7 +3961,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             repeatMode = !repeatMode;
             repeatBtn.classList.toggle('active', repeatMode);
             repeatBtn.style.opacity = repeatMode ? '1' : '0.5';
-            chrome.storage.local.set({ repeatMode });
+            saveLocalStateSafely({ repeatMode });
             updateEmbedControls(overlay);
         });
 
@@ -4535,6 +4568,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
     // Helper function to open preview using configured strategy
     function openPreviewWithStrategy(videoId) {
+        if (!hasValidExtensionContext()) return;
         console.log('[Preview] Opening video:', videoId, 'Strategy:', currentStrategy);
         setTimeout(() => restoreFloatingPreviewControls(), 0);
         if (currentStrategy === 'zen') {
