@@ -807,12 +807,25 @@ if (window.location.pathname.startsWith('/embed/')) {
         subtree: true
     });
 
+    function restoreFloatingPreviewControls(exceptHost = null) {
+        document.querySelectorAll(`.${PREVIEW_WRAPPER_CLASS}.floating`).forEach((wrapper) => {
+            if (exceptHost && wrapper._previewHost === exceptHost) return;
+            wrapper._restoreFloatingPreview?.();
+        });
+    }
+
     // JUST-IN-TIME injection and portal activation. pointerover runs before a
     // possible pointerdown/click, so moving the control cannot cancel the
     // user's first click.
     document.body.addEventListener('pointerover', (e) => {
         if (!e.target || !e.target.closest) return;
         const thumbnail = e.target.closest('ytd-thumbnail') || e.target.closest('#thumbnail') || e.target.closest('ytd-reel-item-renderer');
+        const activeFloatingControl = e.target.closest(`.${PREVIEW_WRAPPER_CLASS}.floating`);
+
+        // A focus switch to Document PiP can interrupt the pointermove that
+        // normally restores a portaled control. Clean up controls belonging to
+        // other thumbnails as soon as YouTube receives the pointer again.
+        restoreFloatingPreviewControls(thumbnail || activeFloatingControl?._previewHost || null);
 
         if (thumbnail) {
             // Force check/inject immediately
@@ -948,6 +961,9 @@ if (window.location.pathname.startsWith('/embed/')) {
             }
             dropdown.querySelector('[data-action="preview-now"]')?.click();
         });
+        mainBtn.addEventListener('pointerenter', () => {
+            dropdown.style.removeProperty('display');
+        });
 
         buttonHost.appendChild(wrapper);
         previewWrappersByHost.set(buttonHost, wrapper);
@@ -1004,6 +1020,7 @@ if (window.location.pathname.startsWith('/embed/')) {
             watchdogInterval = null;
             isFloating = false;
             document.removeEventListener('pointermove', handlePointerMove, true);
+            document.removeEventListener('scroll', handleScroll, true);
             if (host.isConnected) host.appendChild(wrapper);
             else wrapper.remove();
             wrapper.classList.remove('floating');
@@ -1049,6 +1066,12 @@ if (window.location.pathname.startsWith('/embed/')) {
             }
         };
 
+        const handleScroll = () => {
+            // Fixed coordinates become stale as soon as YouTube scrolls.
+            // Restore the control to its thumbnail instead of letting it drift.
+            restore();
+        };
+
         const floatAboveYouTube = (event) => {
             clearTimeout(restoreTimer);
             if (!host.isConnected) return;
@@ -1065,12 +1088,15 @@ if (window.location.pathname.startsWith('/embed/')) {
             wrapper.classList.add('floating');
             document.body.appendChild(wrapper);
             document.addEventListener('pointermove', handlePointerMove, true);
+            document.addEventListener('scroll', handleScroll, true);
             keepPreviewAlive();
             clearInterval(watchdogInterval);
             watchdogInterval = setInterval(keepPreviewAlive, 100);
         };
 
         wrapper._floatAboveYouTube = floatAboveYouTube;
+        wrapper._restoreFloatingPreview = restore;
+        wrapper._previewHost = host;
 
         host.addEventListener('mouseenter', floatAboveYouTube);
         wrapper.addEventListener('mouseenter', () => clearTimeout(restoreTimer));
@@ -1263,6 +1289,11 @@ if (window.location.pathname.startsWith('/embed/')) {
             const videoId = wrapper.dataset.videoId;
             const videoTitle = wrapper.dataset.videoTitle;
             const listId = btn.dataset.listId;
+
+            if (['queue-insert', 'queue-append', 'list-insert', 'list-append'].includes(action)) {
+                dropdown.style.display = 'none';
+                wrapper._restoreFloatingPreview?.();
+            }
 
             // Check if this is a playlist item (for queue/list add actions)
             const container = wrapper._previewContainer
@@ -1860,6 +1891,7 @@ if (window.location.pathname.startsWith('/embed/')) {
 
         console.log('[Preview] Opening video:', videoId, 'Strategy:', currentStrategy);
         PlaybackState.isPlaying = true;
+        setTimeout(() => restoreFloatingPreviewControls(), 0);
 
         if (currentStrategy === 'zen') {
             openZenPopup(videoId);
@@ -1886,6 +1918,14 @@ if (window.location.pathname.startsWith('/embed/')) {
     }
 
     // Strategy 2: Picture-in-Picture (Always on Top)
+    function focusOpenerWindow(pipWindow) {
+        if (pipWindow.closed) return;
+        pipWindow.blur();
+        chrome.runtime.sendMessage({ action: 'focusYouTubeWindow' }).catch((error) => {
+            console.warn('[YouTube Preview] Could not request window focus:', error);
+        });
+    }
+
     async function openPiPWindow(videoId) {
         // Check if Document PiP API is available
         if (!('documentPictureInPicture' in window)) {
@@ -2417,6 +2457,15 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Setup PiP control handlers
             setupPiPControls(pipWindow);
 
+            // Every Preview Now request activates the new/replaced PiP window.
+            // Explicitly release that window before focusing the opener; a
+            // plain opener focus() is ignored while PiP remains active.
+            [200, 500].forEach((delay) => {
+                setTimeout(() => {
+                    focusOpenerWindow(pipWindow);
+                }, delay);
+            });
+
             // Handle window close
             pipWindow.addEventListener('pagehide', () => {
                 console.log('[YouTube Preview] PiP window closed');
@@ -2472,6 +2521,35 @@ if (window.location.pathname.startsWith('/embed/')) {
         const pauseBtn = doc.getElementById('pip-pause');
         const iframe = doc.getElementById('pip-iframe');
         let isPaused = false;
+        let returnFocusTimer = null;
+
+        // Document PiP keeps keyboard focus after the pointer leaves its
+        // always-on-top window. On some platforms the opener then receives no
+        // thumbnail hover events until it is clicked. Return focus as soon as
+        // the pointer crosses the PiP window boundary so Preview remains usable.
+        const returnFocusToYouTube = () => {
+            clearTimeout(returnFocusTimer);
+            returnFocusTimer = setTimeout(() => {
+                focusOpenerWindow(pipWindow);
+            }, 30);
+        };
+        const handleIframeMouseLeave = (event) => {
+            const edgeMargin = 2;
+            const leftWindow = event.clientX <= edgeMargin
+                || event.clientY <= edgeMargin
+                || event.clientX >= pipWindow.innerWidth - edgeMargin
+                || event.clientY >= pipWindow.innerHeight - edgeMargin;
+            if (leftWindow) returnFocusToYouTube();
+        };
+
+        doc.documentElement.addEventListener('mouseleave', returnFocusToYouTube);
+        // The player is cross-origin, so also observe its outer iframe boundary.
+        iframe.addEventListener('mouseleave', handleIframeMouseLeave);
+        pipWindow.addEventListener('pagehide', () => {
+            clearTimeout(returnFocusTimer);
+            doc.documentElement.removeEventListener('mouseleave', returnFocusToYouTube);
+            iframe.removeEventListener('mouseleave', handleIframeMouseLeave);
+        }, { once: true });
 
         // Update button states
         function updateNavButtons() {
@@ -4105,6 +4183,7 @@ if (window.location.pathname.startsWith('/embed/')) {
     // Helper function to open preview using configured strategy
     function openPreviewWithStrategy(videoId) {
         console.log('[Preview] Opening video:', videoId, 'Strategy:', currentStrategy);
+        setTimeout(() => restoreFloatingPreviewControls(), 0);
         if (currentStrategy === 'zen') {
             openZenPopup(videoId);
         } else if (currentStrategy === 'pip') {
