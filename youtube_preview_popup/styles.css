@@ -299,6 +299,43 @@ ytd-rich-grid-slim-media:hover .yt-preview-wrapper {
     letter-spacing: 0.5px;
 }
 
+.yt-preview-lists-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding-right: 7px;
+}
+
+.yt-preview-new-list-btn {
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 7px;
+    color: rgba(255, 255, 255, .42);
+    background: rgba(255, 255, 255, .06);
+    font-size: 18px;
+    font-weight: 400;
+    line-height: 1;
+    cursor: pointer;
+    transition: color .15s, background .15s, border-color .15s, transform .15s;
+}
+
+.yt-preview-new-list-btn:hover,
+.yt-preview-new-list-btn:focus-visible {
+    color: #fff;
+    background: rgba(255, 255, 255, .13);
+    border-color: rgba(255, 255, 255, .22);
+    outline: none;
+}
+
+.yt-preview-new-list-btn:active {
+    transform: scale(.94);
+}
+
 /* Submenu */
 .yt-preview-submenu {
     position: relative;

@@ -1140,10 +1140,10 @@ if (window.location.pathname.startsWith('/embed/')) {
         if (listIds.length > 0 || true) { // Always show lists section
             html += `
                 <div class="yt-preview-dropdown-divider"></div>
-                <div class="yt-preview-dropdown-header">Lists</div>
-                <button class="yt-preview-dropdown-item" data-action="new-list">
-                    + New list
-                </button>
+                <div class="yt-preview-dropdown-header yt-preview-lists-header">
+                    <span>Lists</span>
+                    <button class="yt-preview-new-list-btn" data-action="new-list" title="Create list" aria-label="Create list">+</button>
+                </div>
             `;
 
             listIds.forEach(id => {
