@@ -999,16 +999,26 @@ if (window.location.pathname.startsWith('/embed/')) {
         // Keep the control in the thumbnail's own stacking context. YouTube adds
         // hover overlays inside the thumbnail that can otherwise sit above a
         // button appended to the outer card.
-        const buttonHost = targetContainer;
+        // Playlist renderers can expose multiple video links that previously
+        // resolved to different hosts and produced two Preview controls.
+        const buttonHost = card?.querySelector('ytd-thumbnail, #thumbnail') || targetContainer;
         const videoId = extractVideoId(videoUrl);
         if (!videoId) return;
 
         // Check if wrapper already exists, including when it is temporarily
         // portaled to document.body to escape YouTube's stacking contexts.
+        const wrappersInCard = card
+            ? Array.from(card.querySelectorAll(`.${PREVIEW_WRAPPER_CLASS}`))
+            : [];
         let wrapper = previewWrappersByHost.get(buttonHost)
-            || buttonHost.querySelector(`:scope > .${PREVIEW_WRAPPER_CLASS}`);
+            || buttonHost.querySelector(`:scope > .${PREVIEW_WRAPPER_CLASS}`)
+            || wrappersInCard[0];
 
         if (wrapper) {
+            wrappersInCard.forEach(candidate => {
+                if (candidate !== wrapper) candidate.remove();
+            });
+            previewWrappersByHost.set(buttonHost, wrapper);
             // Update video ID if changed
             if (wrapper.dataset.videoId !== videoId) {
                 wrapper.dataset.videoId = videoId;
