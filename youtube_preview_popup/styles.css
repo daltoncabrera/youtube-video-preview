@@ -175,14 +175,17 @@ ytd-rich-grid-slim-media:hover .yt-preview-button {
 
 /* Show wrapper on hover */
 ytd-thumbnail:hover .yt-preview-wrapper,
+yt-thumbnail-view-model:hover .yt-preview-wrapper,
 #thumbnail:hover .yt-preview-wrapper,
+a.yt-lockup-view-model__content-image:hover .yt-preview-wrapper,
 a:hover > .yt-preview-wrapper,
 ytd-rich-item-renderer:hover .yt-preview-wrapper,
 ytd-grid-video-renderer:hover .yt-preview-wrapper,
 ytd-compact-video-renderer:hover .yt-preview-wrapper,
 ytd-video-renderer:hover .yt-preview-wrapper,
 ytd-reel-item-renderer:hover .yt-preview-wrapper,
-ytd-rich-grid-slim-media:hover .yt-preview-wrapper {
+ytd-rich-grid-slim-media:hover .yt-preview-wrapper,
+yt-lockup-view-model:hover .yt-preview-wrapper {
     display: block !important;
 }
 
@@ -254,7 +257,8 @@ ytd-rich-grid-slim-media:hover .yt-preview-wrapper {
     /* No overflow: hidden - needed for submenu to appear outside */
 }
 
-.yt-preview-wrapper:hover .yt-preview-dropdown {
+.yt-preview-btn-main:hover + .yt-preview-dropdown,
+.yt-preview-dropdown:hover {
     display: block;
 }
 

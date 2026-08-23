@@ -922,32 +922,39 @@ if (window.location.pathname.startsWith('/embed/')) {
     // user's first click.
     document.body.addEventListener('pointerover', (e) => {
         if (!e.target || !e.target.closest) return;
-        const thumbnail = e.target.closest('ytd-thumbnail') || e.target.closest('#thumbnail') || e.target.closest('ytd-reel-item-renderer');
+        const thumbnail = e.target.closest(
+            'ytd-thumbnail, yt-thumbnail-view-model, #thumbnail, '
+            + 'a.yt-lockup-view-model__content-image, ytd-reel-item-renderer'
+        );
         const activeFloatingControl = e.target.closest(`.${PREVIEW_WRAPPER_CLASS}.floating`);
 
-        // A focus switch to Document PiP can interrupt the pointermove that
-        // normally restores a portaled control. Clean up controls belonging to
-        // other thumbnails as soon as YouTube receives the pointer again.
-        restoreFloatingPreviewControls(thumbnail || activeFloatingControl?._previewHost || null);
-
         if (thumbnail) {
-            // Force check/inject immediately
-            // Search relative to the thumbnail to find the video link
-            let anchor = thumbnail.querySelector('a[href*="/watch?v="], a[href*="/shorts/"]');
-
-            // Sometimes the anchor is a sibling or parent depending on layout (list vs grid)
-            if (!anchor) {
+            let anchor = thumbnail.closest('a[href*="/watch?v="], a[href*="/shorts/"]')
+                || thumbnail.querySelector('a[href*="/watch?v="], a[href*="/shorts/"]');
+            if (!anchor && thumbnail.parentElement) {
                 anchor = thumbnail.parentElement.querySelector('a[href*="/watch?v="], a[href*="/shorts/"]');
             }
 
             if (anchor) {
-                // Check if button exists inside the thumbnail container
-                if (!thumbnail.querySelector(`.${PREVIEW_WRAPPER_CLASS}`)) {
-                    createPreviewButton(thumbnail, anchor.getAttribute("href"));
+                const card = thumbnail.closest(
+                    'ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, '
+                    + 'ytd-video-renderer, ytd-playlist-video-renderer, '
+                    + 'ytd-playlist-panel-video-renderer, ytd-reel-item-renderer, '
+                    + 'ytd-rich-grid-slim-media, yt-lockup-view-model'
+                );
+                const previewHost = card?.querySelector(
+                    'ytd-thumbnail, yt-thumbnail-view-model, #thumbnail, '
+                    + 'a.yt-lockup-view-model__content-image'
+                ) || thumbnail;
+                restoreFloatingPreviewControls(previewHost);
+                if (!previewHost.querySelector(`.${PREVIEW_WRAPPER_CLASS}`)) {
+                    createPreviewButton(previewHost, anchor.getAttribute('href'));
                 }
-                const activeWrapper = previewWrappersByHost.get(thumbnail);
+                const activeWrapper = previewWrappersByHost.get(previewHost);
                 if (activeWrapper?._floatAboveYouTube) activeWrapper._floatAboveYouTube(e);
             }
+        } else if (activeFloatingControl) {
+            restoreFloatingPreviewControls(activeFloatingControl._previewHost);
         }
     }, true); // Capture phase
 
@@ -967,9 +974,12 @@ if (window.location.pathname.startsWith('/embed/')) {
             const hasImg = anchor.querySelector('img') || anchor.querySelector('yt-image');
             // Shorts renderers are different, sometimes ytd-rich-grid-slim-media or ytd-reel-item-renderer
             const parentThumbnail = anchor.closest('ytd-thumbnail')
+                || anchor.closest('yt-thumbnail-view-model')
                 || anchor.closest('#thumbnail')
+                || anchor.closest('a.yt-lockup-view-model__content-image')
                 || anchor.closest('ytd-reel-item-renderer')
-                || anchor.closest('ytd-rich-grid-slim-media');
+                || anchor.closest('ytd-rich-grid-slim-media')
+                || anchor.querySelector('ytd-thumbnail, yt-thumbnail-view-model, #thumbnail');
 
             if (!hasImg && !parentThumbnail) return;
 
@@ -993,7 +1003,8 @@ if (window.location.pathname.startsWith('/embed/')) {
             || targetContainer.closest('ytd-playlist-video-renderer')
             || targetContainer.closest('ytd-playlist-panel-video-renderer')
             || targetContainer.closest('ytd-reel-item-renderer')
-            || targetContainer.closest('ytd-rich-grid-slim-media');
+            || targetContainer.closest('ytd-rich-grid-slim-media')
+            || targetContainer.closest('yt-lockup-view-model');
 
         const container = card || targetContainer;
         // Keep the control in the thumbnail's own stacking context. YouTube adds
@@ -1001,7 +1012,10 @@ if (window.location.pathname.startsWith('/embed/')) {
         // button appended to the outer card.
         // Playlist renderers can expose multiple video links that previously
         // resolved to different hosts and produced two Preview controls.
-        const buttonHost = card?.querySelector('ytd-thumbnail, #thumbnail') || targetContainer;
+        const buttonHost = card?.querySelector(
+            'ytd-thumbnail, yt-thumbnail-view-model, #thumbnail, '
+            + 'a.yt-lockup-view-model__content-image'
+        ) || targetContainer;
         const videoId = extractVideoId(videoUrl);
         if (!videoId) return;
 
@@ -1022,6 +1036,9 @@ if (window.location.pathname.startsWith('/embed/')) {
             // Update video ID if changed
             if (wrapper.dataset.videoId !== videoId) {
                 wrapper.dataset.videoId = videoId;
+            }
+            if (buttonHost.matches(':hover') && wrapper._floatAboveYouTube) {
+                wrapper._floatAboveYouTube();
             }
             return;
         }
@@ -1089,34 +1106,103 @@ if (window.location.pathname.startsWith('/embed/')) {
         let watchdogInterval = null;
         let isFloating = false;
         let anchorRect = null;
+        let cardRect = null;
         let lastPointer = null;
 
         const pointInsideRect = (point, rect) => Boolean(point && rect
             && point.x >= rect.left && point.x <= rect.right
             && point.y >= rect.top && point.y <= rect.bottom);
 
+        const getVisibleThumbnailRect = () => {
+            const candidates = [host, ...host.querySelectorAll('yt-image, img')]
+                .map(element => element.getBoundingClientRect())
+                .filter(rect => rect.width > 0 && rect.height > 0);
+            return candidates.reduce((largest, rect) => (
+                !largest || rect.width * rect.height > largest.width * largest.height ? rect : largest
+            ), null) || host.getBoundingClientRect();
+        };
+
         const positionFloatingWrapper = () => {
             if (!anchorRect) return;
             const margin = 10;
+            const buttonRect = wrapper.querySelector('.yt-preview-btn-main')?.getBoundingClientRect();
+            const buttonWidth = buttonRect?.width || 56;
+            const buttonHeight = buttonRect?.height || 24;
+            const isPlaylistThumbnail = Boolean(host.closest(
+                'ytd-playlist-video-renderer, ytd-playlist-panel-video-renderer'
+            ));
+            const dropdown = wrapper.querySelector('.yt-preview-dropdown');
+
+            if (isPlaylistThumbnail) {
+                const compactLeft = btnPos === 'center'
+                    ? anchorRect.left + (anchorRect.width - buttonWidth) / 2
+                    : btnPos.includes('right')
+                        ? anchorRect.right - buttonWidth - margin
+                        : anchorRect.left + margin;
+                const compactTop = btnPos.includes('bottom')
+                    ? anchorRect.bottom - buttonHeight - margin
+                    : anchorRect.top + margin;
+                Object.assign(wrapper.style, {
+                    display: 'block',
+                    visibility: 'visible',
+                    opacity: '1',
+                    position: 'fixed',
+                    zIndex: String(Z_INDEX_POPUP),
+                    padding: '0',
+                    boxSizing: 'content-box',
+                    background: 'transparent',
+                    top: compactTop + 'px',
+                    right: 'auto',
+                    bottom: 'auto',
+                    left: compactLeft + 'px',
+                    transform: 'none'
+                });
+                wrapper.style.setProperty('width', 'auto', 'important');
+                wrapper.style.setProperty('height', 'auto', 'important');
+                if (dropdown) {
+                    dropdown.style.top = buttonHeight + 'px';
+                    dropdown.style.left = '0';
+                }
+                return;
+            }
+
+            const protectionWidth = Math.min(180, anchorRect.width);
+            const protectionHeight = 80;
+            const isRight = btnPos.includes('right');
+            const isBottom = btnPos.includes('bottom');
+            const isCenter = btnPos === 'center';
+            const left = isCenter
+                ? anchorRect.left + (anchorRect.width - protectionWidth) / 2
+                : isRight ? anchorRect.right - protectionWidth : anchorRect.left;
+            const top = isBottom ? anchorRect.bottom - protectionHeight : anchorRect.top;
+            const paddingLeft = isCenter
+                ? Math.max(0, (protectionWidth - buttonWidth) / 2)
+                : isRight ? Math.max(0, protectionWidth - buttonWidth - margin) : margin;
+            const paddingTop = isBottom
+                ? Math.max(0, protectionHeight - buttonHeight - margin)
+                : margin;
             Object.assign(wrapper.style, {
                 display: 'block',
                 visibility: 'visible',
                 opacity: '1',
                 position: 'fixed',
                 zIndex: String(Z_INDEX_POPUP),
-                top: (anchorRect.top + margin) + 'px',
+                width: protectionWidth + 'px',
+                height: protectionHeight + 'px',
+                padding: `${paddingTop}px 0 0 ${paddingLeft}px`,
+                boxSizing: 'border-box',
+                background: 'transparent',
+                top: top + 'px',
                 right: 'auto',
                 bottom: 'auto',
-                left: btnPos === 'top-right'
-                    ? 'auto'
-                    : btnPos === 'center'
-                        ? (anchorRect.left + anchorRect.width / 2) + 'px'
-                        : (anchorRect.left + margin) + 'px',
-                transform: btnPos === 'center' ? 'translateX(-50%)' : 'none'
+                left: left + 'px',
+                transform: 'none'
             });
-
-            if (btnPos === 'top-right') {
-                wrapper.style.right = (window.innerWidth - anchorRect.right + margin) + 'px';
+            wrapper.style.setProperty('width', protectionWidth + 'px', 'important');
+            wrapper.style.setProperty('height', protectionHeight + 'px', 'important');
+            if (dropdown) {
+                dropdown.style.top = (paddingTop + buttonHeight) + 'px';
+                dropdown.style.left = paddingLeft + 'px';
             }
         };
 
@@ -1142,40 +1228,49 @@ if (window.location.pathname.startsWith('/embed/')) {
             wrapper.style.removeProperty('opacity');
             wrapper.style.removeProperty('position');
             wrapper.style.removeProperty('z-index');
+            wrapper.style.removeProperty('width');
+            wrapper.style.removeProperty('height');
+            wrapper.style.removeProperty('padding');
+            wrapper.style.removeProperty('box-sizing');
+            wrapper.style.removeProperty('background');
             wrapper.style.removeProperty('top');
             wrapper.style.removeProperty('right');
             wrapper.style.removeProperty('bottom');
             wrapper.style.removeProperty('left');
             wrapper.style.removeProperty('transform');
+            const dropdown = wrapper.querySelector('.yt-preview-dropdown');
+            dropdown?.style.removeProperty('top');
+            dropdown?.style.removeProperty('left');
         };
 
         const scheduleRestore = () => {
             clearTimeout(restoreTimer);
             restoreTimer = setTimeout(() => {
-                const wrapperRect = wrapper.isConnected ? wrapper.getBoundingClientRect() : null;
-                const stillInside = pointInsideRect(lastPointer, anchorRect)
-                    || pointInsideRect(lastPointer, wrapperRect)
-                    || (lastPointer?.target instanceof Node && wrapper.contains(lastPointer.target));
+                const pointerTarget = lastPointer?.target;
+                const stillInside = pointerTarget instanceof Node
+                    && (host.contains(pointerTarget) || wrapper.contains(pointerTarget));
 
                 if (stillInside) {
                     keepPreviewAlive();
                     return;
                 }
                 restore();
-            }, 300);
+            }, 2000);
         };
 
         const handlePointerMove = (event) => {
             if (!isFloating) return;
             lastPointer = { x: event.clientX, y: event.clientY, target: event.target };
-            const rect = anchorRect;
-            const insideThumbnail = pointInsideRect(lastPointer, rect);
+            const insideThumbnail = event.target instanceof Node && host.contains(event.target);
+            const insideCurrentCard = pointInsideRect(lastPointer, cardRect);
             const insidePreview = event.target instanceof Node && wrapper.contains(event.target);
 
             if (insideThumbnail || insidePreview) {
                 clearTimeout(restoreTimer);
-            } else {
+            } else if (insideCurrentCard) {
                 scheduleRestore();
+            } else {
+                restore();
             }
         };
 
@@ -1196,7 +1291,14 @@ if (window.location.pathname.startsWith('/embed/')) {
                 keepPreviewAlive();
                 return;
             }
-            anchorRect = host.getBoundingClientRect();
+            anchorRect = getVisibleThumbnailRect();
+            const card = host.closest(
+                'ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, '
+                + 'ytd-video-renderer, ytd-playlist-video-renderer, '
+                + 'ytd-playlist-panel-video-renderer, ytd-reel-item-renderer, '
+                + 'ytd-rich-grid-slim-media'
+            );
+            cardRect = (card || host).getBoundingClientRect();
             isFloating = true;
             wrapper.classList.add('floating');
             document.body.appendChild(wrapper);
@@ -1230,6 +1332,13 @@ if (window.location.pathname.startsWith('/embed/')) {
         wrapper.addEventListener('auxclick', (event) => {
             event.preventDefault();
             event.stopPropagation();
+        });
+
+        // YouTube can insert the paid-promotion card before this control is
+        // ready. In that race, mouseenter has already happened, so promote the
+        // control immediately when its thumbnail is already under the pointer.
+        requestAnimationFrame(() => {
+            if (host.isConnected && host.matches(':hover')) floatAboveYouTube();
         });
     }
 
@@ -1439,8 +1548,20 @@ if (window.location.pathname.startsWith('/embed/')) {
             }
 
             switch (action) {
-                case 'preview-now':
-                    // Preview Now: insert into queue and play immediately
+                case 'preview-now': {
+                    // Reuse an existing queue item instead of inserting a duplicate.
+                    const existingIndex = PlaybackState.queue.indexOf(videoId);
+                    if (existingIndex !== -1) {
+                        PlaybackState.activeSource = 'queue';
+                        PlaybackState.currentIndex = existingIndex;
+                        PlaybackState.currentVideoId = videoId;
+                        PlaybackState.commitPlayback();
+                        console.log('[Preview Now] Playing existing queue item:', videoId, 'Index:', existingIndex);
+                        openPreview(`https://www.youtube.com/watch?v=${videoId}`);
+                        break;
+                    }
+
+                    // Otherwise insert into the queue and play immediately.
                     if (PlaybackState.activeSource !== 'queue') {
                         // Switch to queue mode, keeping current video if any
                         PlaybackState.activeSource = 'queue';
@@ -1460,9 +1581,9 @@ if (window.location.pathname.startsWith('/embed/')) {
                     PlaybackState.currentVideoId = videoId;
                     PlaybackState.commitPlayback();
                     console.log('[Preview Now] Inserted and playing:', videoId, 'Queue:', PlaybackState.queue, 'Index:', PlaybackState.currentIndex);
-                    PlaybackState.commitPlayback();
                     openPreview(`https://www.youtube.com/watch?v=${videoId}`);
                     break;
+                }
 
                 case 'queue-insert':
                     PlaybackState.queueInsert(videoId);
